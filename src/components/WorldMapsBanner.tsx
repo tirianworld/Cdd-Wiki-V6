@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { 
@@ -213,11 +214,22 @@ export function WorldMapsBanner() {
     setCurrentIndex((prev) => (prev - 1 + maps.length) % maps.length);
   };
 
-  // Reset zoom when opening/closing lightbox or changing maps
+  // Reset zoom when opening/closing lightbox or changing maps, and close on Escape key
   useEffect(() => {
     setZoom(1);
     setPan({ x: 0, y: 0 });
   }, [isLightboxOpen, currentIndex]);
+
+  useEffect(() => {
+    if (!isLightboxOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setIsLightboxOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isLightboxOpen]);
 
   const handleZoomIn = () => setZoom((z) => Math.min(z + 0.35, 3.5));
   const handleZoomOut = () => setZoom((z) => Math.max(z - 0.35, 0.7));
@@ -415,163 +427,90 @@ export function WorldMapsBanner() {
       </AnimatePresence>
 
       {/* Fullscreen Lightbox / Zoom Modal */}
-      <AnimatePresence>
-        {isLightboxOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex flex-col"
-            onClick={() => setIsLightboxOpen(false)}
-          >
-            {/* Modal Header */}
-            <div 
-              className="flex items-center justify-between px-6 py-4 border-b border-border/60 bg-card/60 backdrop-blur-md z-20"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center gap-3">
-                <div className="h-9 w-9 rounded-xl bg-primary/15 border border-primary/30 flex items-center justify-center text-primary">
-                  <Compass className="h-4.5 w-4.5" />
-                </div>
-                <div>
-                  <h3 className="font-heading text-lg font-bold text-foreground">
-                    {currentMap.name} — {currentMap.subtitle}
-                  </h3>
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span>{currentMap.category}</span>
-                    <span>•</span>
-                    <span>Arrastra o usa la rueda para ampliar y examinar</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Zoom controls, assign button and close */}
-              <div className="flex items-center gap-2">
-                <button
+      {typeof document !== "undefined" &&
+        createPortal(
+          <AnimatePresence>
+            {isLightboxOpen && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-md flex flex-col"
+                onClick={() => setIsLightboxOpen(false)}
+              >
+                {/* Modal Canvas */}
+                <div 
+                  className="flex-1 relative overflow-hidden flex items-center justify-center cursor-grab active:cursor-grabbing p-4 select-none"
+                  onMouseDown={handleMouseDown}
+                  onMouseMove={handleMouseMove}
+                  onMouseUp={handleMouseUp}
                   onClick={() => {
-                    setIsAssignModalOpen(true);
+                    if (zoom <= 1) setIsLightboxOpen(false);
                   }}
-                  className="px-3 py-1.5 rounded-xl bg-secondary/60 hover:bg-secondary border border-border/60 text-xs font-semibold text-foreground flex items-center gap-1.5 transition-colors mr-2"
                 >
-                  <ImageIcon className="h-3.5 w-3.5 text-primary" />
-                  <span>Cambiar Imagen</span>
-                </button>
+                  {/* Floating Cerrar Button in Top-Right of Canvas */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsLightboxOpen(false);
+                    }}
+                    title="Cerrar vista de mapa (Esc)"
+                    className="absolute top-5 right-6 z-30 h-11 w-11 rounded-full bg-card/90 hover:bg-rose-500/25 border border-border/80 hover:border-rose-500/50 text-foreground hover:text-rose-200 shadow-2xl flex items-center justify-center backdrop-blur-md transition-all hover:scale-105 cursor-pointer"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
 
-                <div className="flex items-center bg-secondary/50 border border-border/60 rounded-xl p-1 gap-1">
-                  <button
-                    onClick={handleZoomOut}
-                    title="Reducir zoom"
-                    className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+                  <div
+                    style={{
+                      transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                      transition: isDragging ? "none" : "transform 0.2s ease-out"
+                    }}
+                    className="max-w-[95vw] max-h-[90vh] flex items-center justify-center"
+                    onClick={(e) => e.stopPropagation()}
                   >
-                    <ZoomOut className="h-4 w-4" />
+                    <img
+                      src={currentMap.image}
+                      alt={`Mapa de ${currentMap.name}`}
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        const target = e.currentTarget;
+                        if (currentMap.fallbackImage && target.src !== window.location.origin + currentMap.fallbackImage) {
+                          target.src = currentMap.fallbackImage;
+                        }
+                      }}
+                      className="max-w-full max-h-[88vh] object-contain rounded-lg shadow-2xl border border-border/40 pointer-events-none"
+                    />
+                  </div>
+
+                  {/* Prev / Next controls inside modal */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handlePrev();
+                    }}
+                    className="absolute left-6 top-1/2 -translate-y-1/2 h-12 w-12 rounded-full bg-card/85 hover:bg-card border border-border/80 text-foreground hover:text-primary shadow-2xl flex items-center justify-center backdrop-blur-md transition-all hover:scale-105 cursor-pointer"
+                  >
+                    <ChevronLeft className="h-6 w-6" />
                   </button>
-                  <span className="text-xs font-mono px-2 text-foreground/80 min-w-[50px] text-center">
-                    {Math.round(zoom * 100)}%
-                  </span>
+
                   <button
-                    onClick={handleZoomIn}
-                    title="Aumentar zoom"
-                    className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleNext();
+                    }}
+                    className="absolute right-6 top-1/2 -translate-y-1/2 h-12 w-12 rounded-full bg-card/85 hover:bg-card border border-border/80 text-foreground hover:text-primary shadow-2xl flex items-center justify-center backdrop-blur-md transition-all hover:scale-105 cursor-pointer"
                   >
-                    <ZoomIn className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={handleResetZoom}
-                    title="Restablecer"
-                    className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <RotateCcw className="h-3.5 w-3.5" />
+                    <ChevronRight className="h-6 w-6" />
                   </button>
                 </div>
-
-                <button
-                  onClick={() => setIsLightboxOpen(false)}
-                  className="h-9 w-9 rounded-xl bg-secondary/60 hover:bg-secondary border border-border/60 text-muted-foreground hover:text-foreground flex items-center justify-center transition-colors ml-2"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Modal Canvas */}
-            <div 
-              className="flex-1 relative overflow-hidden flex items-center justify-center cursor-grab active:cursor-grabbing p-4 select-none"
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div
-                style={{
-                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-                  transition: isDragging ? "none" : "transform 0.2s ease-out"
-                }}
-                className="max-w-[95vw] max-h-[82vh] flex items-center justify-center"
-              >
-                <img
-                  src={currentMap.image}
-                  alt={`Mapa de ${currentMap.name}`}
-                  referrerPolicy="no-referrer"
-                  onError={(e) => {
-                    const target = e.currentTarget;
-                    if (currentMap.fallbackImage && target.src !== window.location.origin + currentMap.fallbackImage) {
-                      target.src = currentMap.fallbackImage;
-                    }
-                  }}
-                  className="max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl border border-border/40 pointer-events-none"
-                />
-              </div>
-
-              {/* Prev / Next controls inside modal */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handlePrev();
-                }}
-                className="absolute left-6 top-1/2 -translate-y-1/2 h-12 w-12 rounded-full bg-card/85 hover:bg-card border border-border/80 text-foreground hover:text-primary shadow-2xl flex items-center justify-center backdrop-blur-md transition-all hover:scale-105"
-              >
-                <ChevronLeft className="h-6 w-6" />
-              </button>
-
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleNext();
-                }}
-                className="absolute right-6 top-1/2 -translate-y-1/2 h-12 w-12 rounded-full bg-card/85 hover:bg-card border border-border/80 text-foreground hover:text-primary shadow-2xl flex items-center justify-center backdrop-blur-md transition-all hover:scale-105"
-              >
-                <ChevronRight className="h-6 w-6" />
-              </button>
-            </div>
-
-            {/* Modal Footer with quick map switchers */}
-            <div 
-              className="px-6 py-3 border-t border-border/60 bg-card/60 backdrop-blur-md flex items-center justify-between flex-wrap gap-3 z-20"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center gap-2">
-                {maps.map((map, idx) => (
-                  <button
-                    key={map.id}
-                    onClick={() => handleSelectMap(idx)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-heading font-medium transition-all ${
-                      idx === currentIndex
-                        ? "bg-primary/20 text-primary border border-primary/40"
-                        : "bg-secondary/40 text-muted-foreground hover:text-foreground border border-border/50"
-                    }`}
-                  >
-                    {map.name}
-                  </button>
-                ))}
-              </div>
-
-              <div className="text-xs text-muted-foreground flex items-center gap-2">
-                <span>{currentMap.landmarks.join(" • ")}</span>
-              </div>
-            </div>
-          </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>,
+          document.body
         )}
-      </AnimatePresence>
     </section>
   );
 }
