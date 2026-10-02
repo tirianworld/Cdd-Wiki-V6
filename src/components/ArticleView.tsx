@@ -1,9 +1,10 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
-import { useParams, Link, useNavigate } from "react-router-dom";
+import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
 import { WikiArticle, ArticleEmbeddedGraph } from "../types";
 import { getCategoryIcon, getCategoryColor } from "./Layout";
 import { useCategories } from "../context/CategoryContext";
+import { getAllArticleCategories } from "../utils/categoryHelper";
 import { syncFetch, getCachedArticles, getCachedArticleBySlugOrId } from "../utils/syncArticles";
 import { getCleanMapUrl } from "../utils/mapHelper";
 import { getSafeImageUrl, handleImageErrorWithFallback } from "../utils/imageUrl";
@@ -87,21 +88,53 @@ export function ArticleView() {
   const [activeGalleryIndex, setActiveGalleryIndex] = useState(0);
   const [formatting, setFormatting] = useState(false);
   const [mapZoomLevel, setMapZoomLevel] = useState<number>(1.28); // Default 1.28 (128%) zoom eliminates letterboxing and black borders completely
-  const [isTimelineMinimized, setIsTimelineMinimized] = useState<boolean>(true);
+  const [isTimelineMinimized, setIsTimelineMinimized] = useState<boolean>(() => {
+    try {
+      const savedPref = localStorage.getItem("articleview_timeline_minimized_pref");
+      if (savedPref !== null) {
+        return savedPref === "true";
+      }
+    } catch {}
+    return true;
+  });
 
-  // Al abrir cada artículo, la línea temporal comienza minimizada por defecto
+  // Sincronizar y guardar en caché la preferencia de línea temporal desplegada o minimizada
   useEffect(() => {
-    setIsTimelineMinimized(true);
+    try {
+      const savedPref = localStorage.getItem("articleview_timeline_minimized_pref");
+      if (savedPref !== null) {
+        setIsTimelineMinimized(savedPref === "true");
+      }
+    } catch {}
   }, [slug]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem("articleview_timeline_minimized_pref", String(isTimelineMinimized));
+      if (article?.id) {
+        localStorage.setItem(`articleview_timeline_minimized_${article.id}`, String(isTimelineMinimized));
+      }
+    } catch {}
+  }, [isTimelineMinimized, article?.id]);
+
   const toggleTimelineMinimized = () => {
-    setIsTimelineMinimized((prev) => !prev);
+    setIsTimelineMinimized((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("articleview_timeline_minimized_pref", String(next));
+        if (article?.id) {
+          localStorage.setItem(`articleview_timeline_minimized_${article.id}`, String(next));
+        }
+      } catch {}
+      return next;
+    });
   };
 
   // Floating Map Window Hook ("pestaña flotante dentro de la wiki")
   const { openFloatingMap } = useFloatingMap();
 
   const navigate = useNavigate();
+  const location = useLocation();
 
   // Podcast / Narrator AI States
   const [playerMode, setPlayerMode] = useState<"narrator" | "podcast" | null>(null);
@@ -148,6 +181,7 @@ export function ArticleView() {
   const [editTitle, setEditTitle] = useState("");
   const [editSummary, setEditSummary] = useState("");
   const [editCategory, setEditCategory] = useState("");
+  const [editExtraCategories, setEditExtraCategories] = useState<string[]>([]);
   const [editCoverImage, setEditCoverImage] = useState("");
   const [editInfobox, setEditInfobox] = useState<Record<string, string>>({});
   const [editTimelineMarkers, setEditTimelineMarkers] = useState<any[]>([]);
@@ -164,6 +198,8 @@ export function ArticleView() {
       setEditTitle(article.title || "");
       setEditSummary(article.summary || "");
       setEditCategory(article.category || "");
+      const allCats = getAllArticleCategories(article);
+      setEditExtraCategories(allCats.length > 0 ? allCats : [article.category || "Personajes"]);
       setEditCoverImage(article.image_url || "");
       setEditInfobox(article.infobox ? { ...article.infobox } : {});
       setEditTimelineMarkers(Array.isArray(article.timeline_markers) ? [...article.timeline_markers] : []);
@@ -178,11 +214,15 @@ export function ArticleView() {
       return;
     }
     setIsSavingArticle(true);
+    const finalExtras = Array.from(
+      new Set([editCategory.trim(), ...editExtraCategories].map((c) => (c || "").trim()).filter(Boolean))
+    );
     const updated: WikiArticle = {
       ...article,
       title: editTitle.trim(),
       summary: editSummary.trim(),
       category: editCategory.trim(),
+      extra_categories: finalExtras,
       image_url: editCoverImage.trim(),
       infobox: editInfobox,
       timeline_markers: editTimelineMarkers,
@@ -922,7 +962,17 @@ export function ArticleView() {
     }
   };
 
-  const currentCategory = mergedCategories.find((c) => c.name === article?.category);
+  const activeDisplayCategoryName = useMemo(() => {
+    const fromCat = (location.state as any)?.fromCategory;
+    if (fromCat && typeof fromCat === "string" && fromCat.trim()) {
+      return fromCat.trim();
+    }
+    return article?.category || "Personajes";
+  }, [location.state, article?.category]);
+
+  const currentCategory = mergedCategories.find(
+    (c) => c.name.toLowerCase().trim() === activeDisplayCategoryName.toLowerCase().trim()
+  ) || mergedCategories.find((c) => c.name === article?.category);
   const themeColor = currentCategory ? currentCategory.color : "#a0a0a0";
 
   // Build lookup dictionary for related articles safely
@@ -1122,10 +1172,10 @@ export function ArticleView() {
           <span>/</span>
           {currentCategory ? (
             <Link to={`/categoria/${currentCategory.slug}`} className="hover:text-foreground transition-colors">
-              {article.category}
+              {currentCategory.name}
             </Link>
           ) : (
-            <span>{article.category}</span>
+            <span>{activeDisplayCategoryName}</span>
           )}
           <span>/</span>
           <span className="text-foreground font-medium">{article.title}</span>
@@ -1209,15 +1259,87 @@ export function ArticleView() {
           {/* Main Title Banner */}
           <div>
             {isVisualEditMode ? (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] uppercase font-bold text-muted-foreground">Categoría:</span>
-                  <input
-                    type="text"
-                    value={editCategory}
-                    onChange={(e) => setEditCategory(e.target.value)}
-                    className="px-2 py-0.5 text-xs bg-secondary border border-border rounded text-foreground font-semibold"
-                  />
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[10px] uppercase font-bold text-muted-foreground">Categorías:</span>
+                  {Array.from(new Set([editCategory, ...editExtraCategories].filter(Boolean))).map((catName) => {
+                    const matched = mergedCategories.find(
+                      (c) => c.name.toLowerCase().trim() === catName.toLowerCase().trim()
+                    );
+                    const chipColor = matched?.color || "#2dd4bf";
+                    const isPrimary = catName.toLowerCase().trim() === editCategory.toLowerCase().trim();
+                    const allSelected = Array.from(new Set([editCategory, ...editExtraCategories].filter(Boolean)));
+
+                    return (
+                      <span
+                        key={catName}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-xs font-semibold border"
+                        style={{
+                          backgroundColor: `${chipColor}20`,
+                          borderColor: isPrimary ? chipColor : `${chipColor}55`,
+                          color: chipColor
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setEditCategory(catName)}
+                          title={isPrimary ? "Categoría principal" : "Marcar como categoría principal"}
+                          className="cursor-pointer"
+                        >
+                          {catName}
+                        </button>
+                        {allSelected.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const remaining = allSelected.filter(
+                                (c) => c.toLowerCase().trim() !== catName.toLowerCase().trim()
+                              );
+                              setEditExtraCategories(remaining);
+                              if (isPrimary && remaining.length > 0) {
+                                setEditCategory(remaining[0]);
+                              }
+                            }}
+                            title={`Quitar ${catName}`}
+                            className="hover:opacity-75 cursor-pointer"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        )}
+                      </span>
+                    );
+                  })}
+
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const added = e.target.value;
+                      if (!added) return;
+                      if (!editCategory) setEditCategory(added);
+                      setEditExtraCategories((prev) => {
+                        const current = Array.from(new Set([editCategory, ...prev].filter(Boolean)));
+                        if (current.some((c) => c.toLowerCase().trim() === added.toLowerCase().trim())) {
+                          return current;
+                        }
+                        return [...current, added];
+                      });
+                    }}
+                    className="px-2.5 py-1 text-xs bg-secondary border border-dashed border-primary/45 rounded-lg text-foreground font-semibold cursor-pointer"
+                  >
+                    <option value="">+ Añadir categoría...</option>
+                    {mergedCategories
+                      .filter(
+                        (c) =>
+                          !Array.from(new Set([editCategory, ...editExtraCategories].filter(Boolean))).some(
+                            (sel) => sel.toLowerCase().trim() === c.name.toLowerCase().trim()
+                          )
+                      )
+                      .map((c) => (
+                        <option key={c.slug || c.name} value={c.name}>
+                          {c.parentId || c.parentSlug ? `↳ ${c.name}` : c.name}
+                        </option>
+                      ))}
+                  </select>
                 </div>
                 <div className="space-y-1">
                   <span className="text-[10px] uppercase font-bold text-primary tracking-wider">Título del Artículo:</span>
@@ -1232,7 +1354,7 @@ export function ArticleView() {
             ) : (
               <div>
                 <span className="text-[10px] uppercase font-bold tracking-widest" style={{ color: themeColor }}>
-                  {article.category}
+                  {activeDisplayCategoryName}
                 </span>
                 <div className="flex items-center gap-3 mt-1.5">
                   <h1 className="font-heading text-2.5xl lg:text-3.5xl font-extrabold text-foreground tracking-wide">

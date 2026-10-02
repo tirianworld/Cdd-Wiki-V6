@@ -102,7 +102,7 @@ export const DEFAULT_ARTICLE_SUBCATEGORY_ASSIGNMENTS: Record<string, { category:
   "gravatax-el-dragon-de-amatista": { category: "Gemáticos", extra_categories: ["Dragones", "Gemáticos"] },
   "minos-el-chaman-minotauro": { category: "Ascendidos", extra_categories: ["Personajes", "Ascendidos"] },
   "fafnir-el-dios-dragon": { category: "Ascendidos", extra_categories: ["Dioses", "Ascendidos"] },
-  "coliseo-de-catarina-mt7cpt8n": { category: "Lugares", extra_categories: ["Lugares"] },
+  "coliseo-de-catarina-mt7cpt8n": { category: "Arena", extra_categories: ["Lugares", "Arena"] },
   "el-santa-maria": { category: "Mazmorras", extra_categories: ["Lugares", "Mazmorras"] },
   "mehetia-mrfciyvp": { category: "Mazmorras", extra_categories: ["Lugares", "Mazmorras"] },
   "torre-de-latria-mrfccvm3": { category: "Mazmorras", extra_categories: ["Lugares", "Mazmorras"] },
@@ -113,7 +113,7 @@ export const DEFAULT_ARTICLE_SUBCATEGORY_ASSIGNMENTS: Record<string, { category:
   "gran-reino-enano-de-thorin-mrdtvqcc": { category: "Reinos", extra_categories: ["Lugares", "Reinos"] },
   "thrag-mrdrc85l": { category: "Ascendidos", extra_categories: ["Personajes", "Ascendidos"] },
   "las-islas-de-kaanil-mrdowgts": { category: "Lugares", extra_categories: ["Lugares"] },
-  "coliseo-onirico-mrdbt1cy": { category: "Lugares", extra_categories: ["Lugares"] },
+  "coliseo-onirico-mrdbt1cy": { category: "Arena", extra_categories: ["Lugares", "Arena"] },
   "mansion-de-zaltar": { category: "Mazmorras", extra_categories: ["Lugares", "Mazmorras"] },
   "mansion-loux": { category: "Asentamientos", extra_categories: ["Lugares", "Asentamientos"] },
   "mansion-ferton": { category: "Mazmorras", extra_categories: ["Lugares", "Mazmorras"] },
@@ -147,6 +147,7 @@ export const DEFAULT_ARTICLE_SUBCATEGORY_ASSIGNMENTS: Record<string, { category:
   "icespear-9a1e7c": { category: "Asentamientos", extra_categories: ["Lugares", "Asentamientos"] },
   "el-maestro-db608e": { category: "Antiguos", extra_categories: ["Personajes", "Antiguos"] },
   "tarot-el-gran-bibliotecario-8300f5": { category: "Antiguos", extra_categories: ["Personajes", "Antiguos"] },
+  "gran-arana-acorazada-ea7987": { category: "Antiguos", extra_categories: ["Personajes", "Antiguos"] },
   "rey-allant-fb4cad": { category: "Portadores de Marca", extra_categories: ["Personajes", "Portadores de Marca"] },
   "el-santuario-d45cdc": { category: "Asentamientos", extra_categories: ["Lugares", "Asentamientos"] },
   "lothric-a1d86b": { category: "Reinos", extra_categories: ["Lugares", "Reinos"] },
@@ -469,11 +470,15 @@ export async function syncFetch(
       // Background smart revalidation with server (Stale-While-Revalidate pattern)
       setTimeout(async () => {
         try {
-          const cachedMap: { [id: string]: string } = {};
+          const cachedMap: { [id: string]: { updated_date: string; category?: string; extra_categories?: string[] } } = {};
           const currentCached = getCachedArticles();
           currentCached.forEach((art) => {
             if (art.id) {
-              cachedMap[art.id] = art.updated_date || "";
+              cachedMap[art.id] = {
+                updated_date: art.updated_date || "",
+                category: art.category || "",
+                extra_categories: Array.isArray(art.extra_categories) ? art.extra_categories : []
+              };
             }
           });
 

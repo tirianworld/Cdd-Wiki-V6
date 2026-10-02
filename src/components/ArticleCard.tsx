@@ -4,18 +4,30 @@ import { WikiArticle } from "../types";
 import { getCategoryIcon, getCategoryColor } from "./Layout";
 import { Clock, Eye } from "lucide-react";
 import { getSafeImageUrl, getProxiedFallbackUrl } from "../utils/imageUrl";
+import { getRootCategoryForArticle } from "../utils/categoryHelper";
+import { useCategories } from "../context/CategoryContext";
 
 interface ArticleCardProps {
   article: WikiArticle;
   compact?: boolean;
+  useRootCategory?: boolean;
+  displayCategory?: string;
   key?: React.Key | string | number;
 }
 
-export function ArticleCard({ article, compact = false }: ArticleCardProps) {
+export function ArticleCard({ article, compact = false, useRootCategory = false, displayCategory }: ArticleCardProps) {
   const [proxyAttempted, setProxyAttempted] = useState(false);
   const [imgFailed, setImgFailed] = useState(false);
-  const Icon = getCategoryIcon(article.category);
-  const themeColor = getCategoryColor(article.category);
+  const { mergedCategories } = useCategories();
+
+  const displayedCategory = useMemo(() => {
+    if (displayCategory && displayCategory.trim()) return displayCategory.trim();
+    if (!useRootCategory) return article.category;
+    return getRootCategoryForArticle(article, mergedCategories);
+  }, [displayCategory, useRootCategory, article, mergedCategories]);
+
+  const Icon = getCategoryIcon(displayedCategory);
+  const themeColor = getCategoryColor(displayedCategory);
 
   const baseSafeUrl = useMemo(() => getSafeImageUrl(article.image_url), [article.image_url]);
 
@@ -39,6 +51,7 @@ export function ArticleCard({ article, compact = false }: ArticleCardProps) {
     return (
       <Link 
         to={`/articulo/${article.slug}`}
+        state={{ fromCategory: displayedCategory }}
         className="group bg-card hover:bg-secondary/45 border border-border rounded-lg p-4 flex gap-4 items-center transition-all hover:border-primary/20 hover:shadow-sm"
       >
         {safeImageUrl ? (
@@ -62,7 +75,7 @@ export function ArticleCard({ article, compact = false }: ArticleCardProps) {
         )}
         <div className="min-w-0 flex-1">
           <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: themeColor }}>
-            {article.category}
+            {displayedCategory}
           </span>
           <h4 className="font-heading text-sm font-semibold text-foreground truncate group-hover:text-primary transition-colors">
             {article.title}
@@ -78,6 +91,7 @@ export function ArticleCard({ article, compact = false }: ArticleCardProps) {
   return (
     <Link 
       to={`/articulo/${article.slug}`}
+      state={{ fromCategory: displayedCategory }}
       className="group bg-card hover:bg-secondary/35 border border-border rounded-xl overflow-hidden flex flex-col h-full transition-all hover:border-primary/30 hover:shadow-md hover:shadow-primary/5 hover:-translate-y-0.5 duration-200"
     >
       {/* Article thumbnail */}
@@ -98,7 +112,7 @@ export function ArticleCard({ article, compact = false }: ArticleCardProps) {
             className="absolute bottom-3 left-3 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded border"
             style={{ backgroundColor: `${themeColor}22`, borderColor: themeColor, color: themeColor }}
           >
-            {article.category}
+            {displayedCategory}
           </span>
         </div>
       ) : (
@@ -113,7 +127,7 @@ export function ArticleCard({ article, compact = false }: ArticleCardProps) {
             className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded border w-fit self-start"
             style={{ backgroundColor: `${themeColor}22`, borderColor: themeColor, color: themeColor }}
           >
-            {article.category}
+            {displayedCategory}
           </span>
         </div>
       )}

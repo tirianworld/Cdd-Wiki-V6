@@ -15,3 +15,7 @@ export const CALDO_PRIMORDIAL_SOMBRA_FALLBACK_URL = "/images/caldo_primordial_so
 
 export const CALDO_PRIMORDIAL_REFLEJO_SOLID_SRC = "/images/caldo_primordial_reflejo_solid.png";
 export const CALDO_PRIMORDIAL_REFLEJO_FALLBACK_URL = "/images/caldo_primordial_reflejo_solid.png";
+
+export const CALDO_PRIMORDIAL_ELFO_SOLID_SRC = "/images/caldo_primordial_elfo_solid.png";
+export const CALDO_PRIMORDIAL_ELFO_FALLBACK_URL = "/images/caldo_primordial_elfo_solid.png";
+

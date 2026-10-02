@@ -3,10 +3,11 @@ import { Link } from "react-router-dom";
 import { WikiArticle, WikiCategory } from "../types";
 import { getCategoryIcon } from "./Layout";
 import { ArticleCard } from "./ArticleCard";
-import { Library, FileText, FolderSync, Edit3, ChevronUp, ChevronDown, Minimize2, Maximize2, Flame, Compass, Plus, Sparkles, SlidersHorizontal } from "lucide-react";
+import { Library, FileText, FolderSync, Edit3, ChevronUp, ChevronDown, Minimize2, Maximize2, Flame, Compass, Plus, Sparkles, SlidersHorizontal, Upload, RotateCcw, Loader2 } from "lucide-react";
 import { TarotLogo } from "./TarotLogo";
-import { useCategories } from "../context/CategoryContext";
+import { useCategories, getGitHubAuthHeaders } from "../context/CategoryContext";
 import { useVisualEditor } from "../context/VisualEditorContext";
+import { useUIContent } from "../context/UIContentContext";
 import { syncFetch, getCachedArticles } from "../utils/syncArticles";
 import { LatestEventsPanel } from "./LatestEventsPanel";
 import { WorldMapsBanner } from "./WorldMapsBanner";
@@ -16,9 +17,98 @@ import { CategoryReorderModal } from "./CategoryReorderModal";
 import { AstralClockLogo } from "./AstralClockWatermark";
 
 export function Home() {
-  const { isVisualEditMode } = useVisualEditor();
+  const { isVisualEditMode, showToast } = useVisualEditor();
+  const { getText, setMultipleTexts, resetText } = useUIContent();
   const [editingCategory, setEditingCategory] = useState<any | null>(null);
   const [showReorderModal, setShowReorderModal] = useState(false);
+  const heroBannerInputRef = useRef<HTMLInputElement | null>(null);
+  const [isUploadingHeroBanner, setIsUploadingHeroBanner] = useState(false);
+
+  const heroBannerImg = getText("banner.image.home_hero", "");
+  const isHeroBannerTransparent = getText("banner.transparent.home_hero", "false") === "true";
+
+  const handleHeroBannerUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      showToast("Selecciona una imagen válida desde tu PC.", "warning");
+      return;
+    }
+    setIsUploadingHeroBanner(true);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const dataUrl = reader.result as string;
+      try {
+        const res = await fetch("/api/banner-image", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...getGitHubAuthHeaders(),
+          },
+          body: JSON.stringify({
+            bannerKey: "home_hero",
+            dataUrl,
+            fit: "cover",
+            transparent: "true",
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || "Error al subir imagen");
+        const savedUrl = `${data.url}?t=${Date.now()}`;
+        await setMultipleTexts({ 
+          "banner.image.home_hero": savedUrl,
+          "banner.transparent.home_hero": "true"
+        });
+        showToast("✨ Imagen del banner principal guardada permanentemente con fondo transparente.", "success");
+      } catch (err: any) {
+        showToast(err?.message || "No se pudo guardar el banner.", "error");
+      } finally {
+        setIsUploadingHeroBanner(false);
+        if (heroBannerInputRef.current) heroBannerInputRef.current.value = "";
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleToggleHeroTransparent = async () => {
+    const nextVal = !isHeroBannerTransparent;
+    try {
+      await setMultipleTexts({ "banner.transparent.home_hero": nextVal ? "true" : "false" });
+      await fetch("/api/banner-image", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...getGitHubAuthHeaders(),
+        },
+        body: JSON.stringify({
+          bannerKey: "home_hero",
+          transparent: nextVal ? "true" : "false",
+        }),
+      });
+      showToast(nextVal ? "Fondo transparente activado en el banner principal." : "Fondo con degradado activado.", "info");
+    } catch {}
+  };
+
+  const handleResetHeroBanner = async () => {
+    setIsUploadingHeroBanner(true);
+    try {
+      await fetch("/api/banner-image/reset", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...getGitHubAuthHeaders(),
+        },
+        body: JSON.stringify({ bannerKey: "home_hero" }),
+      });
+      await resetText("banner.image.home_hero");
+      await resetText("banner.transparent.home_hero");
+      showToast("Banner principal restablecido al fondo original.", "info");
+    } catch {
+      showToast("Error al restablecer el banner.", "error");
+    } finally {
+      setIsUploadingHeroBanner(false);
+    }
+  };
 
   const [allArticlesList, setAllArticlesList] = useState<WikiArticle[]>(() => {
     const cached = getCachedArticles();
@@ -248,6 +338,81 @@ export function Home() {
 
       {/* 1. Banner de Bienvenidos a la Dragopedia */}
       <section className="relative overflow-hidden rounded-2xl border border-border/80 bg-gradient-to-br from-card via-card/95 to-secondary/35 p-6 sm:p-8 md:p-10 shadow-lg">
+        {/* Custom uploaded Hero Banner Background Image (if set) */}
+        {heroBannerImg && (
+          <div className="absolute inset-0 pointer-events-none select-none z-0">
+            <img
+              src={heroBannerImg}
+              alt="Fondo del Banner de Bienvenida"
+              referrerPolicy="no-referrer"
+              className={`w-full h-full object-cover object-center ${
+                isHeroBannerTransparent ? "opacity-90" : "opacity-40"
+              }`}
+            />
+            {!isHeroBannerTransparent && (
+              <div className="absolute inset-0 bg-gradient-to-r from-card/95 via-card/80 to-card/50" />
+            )}
+          </div>
+        )}
+
+        {/* Edit Mode PC Upload Controls for Hero Banner */}
+        {isVisualEditMode && (
+          <div className="absolute top-3 right-3 z-30 flex items-center gap-1.5 flex-wrap justify-end">
+            <input
+              ref={heroBannerInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleHeroBannerUpload}
+              className="hidden"
+            />
+            <button
+              type="button"
+              disabled={isUploadingHeroBanner}
+              onClick={() => heroBannerInputRef.current?.click()}
+              className="px-3 py-1.5 rounded-xl bg-card/95 hover:bg-primary text-foreground hover:text-primary-foreground border border-primary/50 shadow-lg backdrop-blur-md text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-60"
+              title="Subir imagen desde tu PC para el fondo del banner de bienvenida"
+            >
+              {isUploadingHeroBanner ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                  <span>Guardando...</span>
+                </>
+              ) : (
+                <>
+                  <Upload className="h-3.5 w-3.5 text-primary" />
+                  <span>Reemplazar banner desde PC</span>
+                </>
+              )}
+            </button>
+            {heroBannerImg && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleToggleHeroTransparent}
+                  className={`px-2.5 py-1.5 rounded-xl border shadow-lg backdrop-blur-md text-xs font-medium flex items-center gap-1 transition-all cursor-pointer ${
+                    isHeroBannerTransparent
+                      ? "bg-teal-500/20 text-teal-300 border-teal-500/50"
+                      : "bg-card/95 text-muted-foreground hover:text-foreground border-border/80"
+                  }`}
+                  title="Alternar fondo transparente"
+                >
+                  <span>{isHeroBannerTransparent ? "Fondo: Transparente" : "Fondo: Degradado"}</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={isUploadingHeroBanner}
+                  onClick={handleResetHeroBanner}
+                  className="px-2.5 py-1.5 rounded-xl bg-card/95 hover:bg-rose-500/20 text-rose-300 border border-rose-500/40 shadow-lg backdrop-blur-md text-xs font-medium flex items-center gap-1 transition-all cursor-pointer"
+                  title="Quitar imagen personalizada y restaurar fondo original"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Original</span>
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
         {/* Decorative background watermark with Astral Clock showing a little more than a quarter */}
         <div 
           className="absolute -right-24 -bottom-24 sm:-right-32 sm:-bottom-32 md:-right-40 md:-bottom-40 pointer-events-none select-none text-muted-foreground/15 dark:text-primary/[0.10]"
@@ -259,8 +424,7 @@ export function Home() {
         </div>
 
         <div className="relative z-10 max-w-3xl space-y-4">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 border border-primary/25 text-primary text-xs font-semibold tracking-wider uppercase font-heading">
-            <Flame className="h-3.5 w-3.5" />
+          <div className="inline-flex items-center px-3 py-1 rounded-full bg-primary/10 border border-primary/25 text-primary text-xs font-semibold tracking-wider uppercase font-heading">
             <span>Enciclopedia Oficial de Caldo de Dragón</span>
           </div>
 
@@ -346,17 +510,6 @@ export function Home() {
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Reorder categories button */}
-            <button
-              type="button"
-              onClick={() => setShowReorderModal(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg border border-border/60 bg-secondary/40 hover:bg-secondary/70 text-muted-foreground hover:text-foreground transition-colors"
-              title="Reordenar categorías cósmicas (personalizadas y fijas)"
-            >
-              <SlidersHorizontal className="h-3.5 w-3.5 text-accent" />
-              <span className="hidden sm:inline font-medium">Reordenar</span>
-            </button>
-
             {/* Toggle minimize button */}
             <button
               type="button"
@@ -494,7 +647,7 @@ export function Home() {
           />
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {featuredArticles.map((article) => (
-              <ArticleCard key={article.id} article={article} />
+              <ArticleCard key={article.id} article={article} useRootCategory />
             ))}
           </div>
         </section>
@@ -511,7 +664,7 @@ export function Home() {
         />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {latestArticles.map((article) => (
-            <ArticleCard key={article.id} article={article} compact />
+            <ArticleCard key={article.id} article={article} compact useRootCategory />
           ))}
         </div>
       </section>

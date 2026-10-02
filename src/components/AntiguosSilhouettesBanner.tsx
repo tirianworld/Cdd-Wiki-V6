@@ -1,15 +1,15 @@
 import React, { useState } from "react";
 
-interface AscendidosSilhouettesBannerProps {
+interface AntiguosSilhouettesBannerProps {
   className?: string;
   color?: string;
 }
 
-export function AscendidosSilhouettesBanner({
+export function AntiguosSilhouettesBanner({
   className = "w-full min-h-[110px] sm:min-h-[140px] md:min-h-[170px]",
   color = "#232e33",
-}: AscendidosSilhouettesBannerProps) {
-  const [imgSrc, setImgSrc] = useState("/images/caldo_ascendidos_silhouettes_solid.png?v=5");
+}: AntiguosSilhouettesBannerProps) {
+  const [imgSrc, setImgSrc] = useState("/images/caldo_antiguos_silhouettes_solid.png?v=1");
 
   return (
     <div
@@ -22,15 +22,15 @@ export function AscendidosSilhouettesBanner({
       />
       <div className="absolute bottom-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-border/80 to-transparent pointer-events-none z-30" />
 
-      {/* Solid Character Silhouettes (Arlem Díaz, Gildemar, Zaltar, Arthorius, Gorm, Zaratras, Nemuina, Thrag, Magordito y Minos) */}
+      {/* Solid Character Silhouettes (El Maestro, Oki, Tarot, La Araña y El Cazador) */}
       <div className="relative z-10 flex items-end justify-center w-full h-full p-0 m-0">
         <img
           src={imgSrc}
-          alt="Siluetas sólidas de Héroes Ascendidos de Caldo de Dragón: Arlem Díaz, Gildemar, Zaltar, Arthorius, Gorm, Zaratras, Nemuina, Thrag, Magordito y Minos"
+          alt="Siluetas sólidas de los Antiguos de Caldo de Dragón: El Maestro, Oki, Tarot, La Araña y El Cazador"
           referrerPolicy="no-referrer"
           className="w-full h-auto max-h-[360px] self-end object-contain object-bottom select-none pointer-events-none transition-transform duration-300 origin-bottom group-hover:scale-[1.01] block m-0 p-0"
           style={{ objectPosition: "center bottom", width: "100%", height: "auto" }}
-          onError={() => setImgSrc("/images/caldo_ascendidos_banner.jpg")}
+          onError={() => setImgSrc("/images/caldo_antiguos_silhouettes_solid.png")}
         />
       </div>
     </div>

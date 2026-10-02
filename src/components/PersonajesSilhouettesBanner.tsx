@@ -6,7 +6,7 @@ interface PersonajesSilhouettesBannerProps {
 }
 
 export function PersonajesSilhouettesBanner({
-  className = "w-full h-28 sm:h-36 md:h-44",
+  className = "w-full min-h-[110px] sm:min-h-[140px] md:min-h-[170px]",
   color = "#232e33",
 }: PersonajesSilhouettesBannerProps) {
   const [imgSrc, setImgSrc] = useState("/images/caldo_personajes_drawn_solid.png");
@@ -23,8 +23,8 @@ export function PersonajesSilhouettesBanner({
         <img
           src={imgSrc}
           alt="Siluetas de Personajes de Caldo de Dragón"
-          className="w-full h-full max-h-44 self-end object-contain object-bottom select-none pointer-events-none transition-transform duration-300 origin-bottom group-hover:scale-[1.01] block m-0 p-0"
-          style={{ objectPosition: "center bottom" }}
+          className="w-full h-auto max-h-[360px] self-end object-contain object-bottom select-none pointer-events-none transition-transform duration-300 origin-bottom group-hover:scale-[1.01] block m-0 p-0"
+          style={{ objectPosition: "center bottom", width: "100%", height: "auto" }}
           onError={() => setImgSrc("/images/caldo_personajes_drawn_dark.png")}
         />
       </div>

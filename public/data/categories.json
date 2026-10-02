@@ -282,5 +282,15 @@
     "parentId": "cat-1790847010090",
     "parentSlug": "primordiales",
     "id": "cat-1790879519225"
+  },
+  {
+    "name": "Arena",
+    "slug": "arena",
+    "description": "Subcategoría de Lugares",
+    "color": "#9b7d83",
+    "icon": "MapPin",
+    "parentId": "cat-lugares",
+    "parentSlug": "lugares",
+    "id": "cat-1790880265420"
   }
 ]

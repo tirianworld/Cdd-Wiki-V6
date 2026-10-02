@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { 
   Flame, Users, MapPin, Calendar, Sparkles, Shield, Heart, Gem, PawPrint,
   Menu, X, Search, FilePlus, Network, Compass, HelpCircle, BookOpen, SlidersHorizontal, Database, MessageSquare, Book,
-  ChevronDown, Wand2, Layers, Home
+  ChevronDown, Wand2, Layers, Home, GripVertical
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { TarotLogo } from "./TarotLogo";
@@ -62,12 +62,24 @@ export function Layout({ children }: LayoutProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const location = useLocation();
   const navigate = useNavigate();
-  const { mergedCategories } = useCategories();
+  const { mergedCategories, reorderCategories } = useCategories();
   const { currentLang, setLanguage, languages, t } = useLanguage();
-  const { isVisualEditMode } = useVisualEditor();
+  const { isVisualEditMode, showToast } = useVisualEditor();
   const { getText } = useUIContent();
   const [langDropdownOpen, setLangDropdownOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<any | null>(null);
+  const [draggedSidebarItem, setDraggedSidebarItem] = useState<{
+    id: string;
+    type: "root" | "sub";
+    parentId?: string;
+  } | null>(null);
+  const [dragOverSidebarItem, setDragOverSidebarItem] = useState<{
+    id: string;
+    type: "root" | "sub";
+    parentId?: string;
+    position: "before" | "after";
+  } | null>(null);
+  const isSidebarDraggingRef = React.useRef(false);
 
   // Collapsible sidebar sections state
   const [homeCollapsed, setHomeCollapsed] = useState<boolean>(() => {
@@ -115,24 +127,13 @@ export function Layout({ children }: LayoutProps) {
   }, [categoriesCollapsed]);
 
   const [isReorderModalOpen, setIsReorderModalOpen] = useState(false);
-  const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>(() => {
-    try {
-      const saved = localStorage.getItem("dragopedia_sidebar_expanded_cats");
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return {
-      "cat-personajes": true,
-      "personajes": true,
-      "6a21b20b721db0dddbdc7dca": true,
-      "planos": true,
-    };
-  });
+  const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
 
   React.useEffect(() => {
     try {
-      localStorage.setItem("dragopedia_sidebar_expanded_cats", JSON.stringify(expandedCategories));
+      localStorage.removeItem("dragopedia_sidebar_expanded_cats");
     } catch {}
-  }, [expandedCategories]);
+  }, []);
 
   // Subcategorías y jerarquía para el árbol del sidebar
   const getSubcategories = (parentCat: { id: string; slug: string }) => {
@@ -156,12 +157,188 @@ export function Layout({ children }: LayoutProps) {
     return !parentExists;
   });
 
+  const handleRootDragStart = (catKey: string, e: React.DragEvent) => {
+    if (!isVisualEditMode) return;
+    e.stopPropagation();
+    isSidebarDraggingRef.current = true;
+    setDraggedSidebarItem({ id: catKey, type: "root" });
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", catKey);
+  };
+
+  const handleRootDragOver = (catKey: string, e: React.DragEvent<HTMLElement>) => {
+    if (!isVisualEditMode || !draggedSidebarItem || draggedSidebarItem.type !== "root") return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "move";
+    if (draggedSidebarItem.id === catKey) {
+      if (dragOverSidebarItem) setDragOverSidebarItem(null);
+      return;
+    }
+    const rect = e.currentTarget.getBoundingClientRect();
+    const position: "before" | "after" = e.clientY < rect.top + rect.height / 2 ? "before" : "after";
+    if (
+      !dragOverSidebarItem ||
+      dragOverSidebarItem.id !== catKey ||
+      dragOverSidebarItem.position !== position ||
+      dragOverSidebarItem.type !== "root"
+    ) {
+      setDragOverSidebarItem({ id: catKey, type: "root", position });
+    }
+  };
+
+  const handleRootDrop = (targetCatKey: string, e: React.DragEvent<HTMLElement>) => {
+    if (!isVisualEditMode || !draggedSidebarItem || draggedSidebarItem.type !== "root") return;
+    e.preventDefault();
+    e.stopPropagation();
+    const fromKey = draggedSidebarItem.id;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const position: "before" | "after" =
+      dragOverSidebarItem?.id === targetCatKey
+        ? dragOverSidebarItem.position
+        : e.clientY < rect.top + rect.height / 2
+        ? "before"
+        : "after";
+
+    setDraggedSidebarItem(null);
+    setDragOverSidebarItem(null);
+    setTimeout(() => {
+      isSidebarDraggingRef.current = false;
+    }, 80);
+
+    if (fromKey === targetCatKey) return;
+
+    const rootKeys = rootCategories.map((c) => c.id || c.slug);
+    const fromIdx = rootKeys.indexOf(fromKey);
+    if (fromIdx === -1) return;
+
+    const nextRootKeys = [...rootKeys];
+    const [moved] = nextRootKeys.splice(fromIdx, 1);
+    const targetIdx = nextRootKeys.indexOf(targetCatKey);
+    if (targetIdx === -1) return;
+
+    const insertIdx = position === "before" ? targetIdx : targetIdx + 1;
+    nextRootKeys.splice(insertIdx, 0, moved);
+
+    const rootSet = new Set(rootKeys);
+    const nonRootKeys = mergedCategories
+      .map((c) => c.id || c.slug)
+      .filter((k) => !rootSet.has(k));
+
+    reorderCategories([...nextRootKeys, ...nonRootKeys]);
+    showToast("Orden de categorías guardado.", "success");
+  };
+
+  const handleSubDragStart = (subKey: string, parentKey: string, e: React.DragEvent) => {
+    if (!isVisualEditMode) return;
+    e.stopPropagation();
+    isSidebarDraggingRef.current = true;
+    setDraggedSidebarItem({ id: subKey, type: "sub", parentId: parentKey });
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", subKey);
+  };
+
+  const handleSubDragOver = (subKey: string, parentKey: string, e: React.DragEvent<HTMLElement>) => {
+    if (
+      !isVisualEditMode ||
+      !draggedSidebarItem ||
+      draggedSidebarItem.type !== "sub" ||
+      draggedSidebarItem.parentId !== parentKey
+    ) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "move";
+    if (draggedSidebarItem.id === subKey) {
+      if (dragOverSidebarItem) setDragOverSidebarItem(null);
+      return;
+    }
+    const rect = e.currentTarget.getBoundingClientRect();
+    const position: "before" | "after" = e.clientY < rect.top + rect.height / 2 ? "before" : "after";
+    if (
+      !dragOverSidebarItem ||
+      dragOverSidebarItem.id !== subKey ||
+      dragOverSidebarItem.position !== position ||
+      dragOverSidebarItem.type !== "sub"
+    ) {
+      setDragOverSidebarItem({ id: subKey, type: "sub", parentId: parentKey, position });
+    }
+  };
+
+  const handleSubDrop = (
+    targetSubKey: string,
+    parentCat: { id: string; slug: string; name?: string },
+    e: React.DragEvent<HTMLElement>
+  ) => {
+    const parentKey = parentCat.id || parentCat.slug;
+    if (
+      !isVisualEditMode ||
+      !draggedSidebarItem ||
+      draggedSidebarItem.type !== "sub" ||
+      draggedSidebarItem.parentId !== parentKey
+    ) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    const fromKey = draggedSidebarItem.id;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const position: "before" | "after" =
+      dragOverSidebarItem?.id === targetSubKey
+        ? dragOverSidebarItem.position
+        : e.clientY < rect.top + rect.height / 2
+        ? "before"
+        : "after";
+
+    setDraggedSidebarItem(null);
+    setDragOverSidebarItem(null);
+    setTimeout(() => {
+      isSidebarDraggingRef.current = false;
+    }, 80);
+
+    if (fromKey === targetSubKey) return;
+
+    const currentSubs = getSubcategories(parentCat);
+    const subKeys = currentSubs.map((s) => s.id || s.slug);
+    const fromIdx = subKeys.indexOf(fromKey);
+    if (fromIdx === -1) return;
+
+    const nextSubKeys = [...subKeys];
+    const [moved] = nextSubKeys.splice(fromIdx, 1);
+    const targetIdx = nextSubKeys.indexOf(targetSubKey);
+    if (targetIdx === -1) return;
+
+    const insertIdx = position === "before" ? targetIdx : targetIdx + 1;
+    nextSubKeys.splice(insertIdx, 0, moved);
+
+    const subSet = new Set(subKeys);
+    let subCursor = 0;
+    const newOrder = mergedCategories.map((c) => {
+      const k = c.id || c.slug;
+      if (subSet.has(k)) {
+        return nextSubKeys[subCursor++];
+      }
+      return k;
+    });
+
+    reorderCategories(newOrder);
+    showToast(`Orden de subcategorías de ${parentCat.name || "categoría"} guardado.`, "success");
+  };
+
+  const handleSidebarDragEnd = () => {
+    setDraggedSidebarItem(null);
+    setDragOverSidebarItem(null);
+    setTimeout(() => {
+      isSidebarDraggingRef.current = false;
+    }, 80);
+  };
+
   React.useEffect(() => {
     mergedCategories.forEach((parentCat) => {
       const subcats = getSubcategories(parentCat);
       const isSubActive = subcats.some((s) => location.pathname === `/categoria/${s.slug}`);
-      const isParentActive = location.pathname === `/categoria/${parentCat.slug}`;
-      if (isSubActive || isParentActive) {
+      if (isSubActive) {
         setExpandedCategories((prev) => ({
           ...prev,
           [parentCat.id]: true,
@@ -228,9 +405,6 @@ export function Layout({ children }: LayoutProps) {
             </button>
 
             <Link to="/" className="flex items-center gap-2.5 hover:opacity-90 transition-opacity">
-              <div className="h-8 w-8 rounded-lg bg-primary/20 flex items-center justify-center border border-primary/30 shrink-0">
-                <Flame className="h-4.5 w-4.5 text-primary" />
-              </div>
               <EditableText
                 textKey="nav.brand"
                 defaultValue="DRAGOPEDIA"
@@ -633,27 +807,68 @@ export function Layout({ children }: LayoutProps) {
                 <div className="space-y-0.5">
                   {rootCategories.map((cat) => {
                     const Icon = cat.icon;
+                    const catKey = cat.id || cat.slug;
                     const subcats = getSubcategories(cat);
                     const hasSubcategories = subcats.length > 0;
                     const isExpanded = !!expandedCategories[cat.id] || !!expandedCategories[cat.slug];
                     const isParentActive = location.pathname === `/categoria/${cat.slug}`;
                     const hasActiveChild = subcats.some((s) => location.pathname === `/categoria/${s.slug}`);
+                    const isDraggingRoot =
+                      isVisualEditMode &&
+                      draggedSidebarItem?.type === "root" &&
+                      draggedSidebarItem.id === catKey;
+                    const isDragOverRoot =
+                      isVisualEditMode &&
+                      dragOverSidebarItem?.type === "root" &&
+                      dragOverSidebarItem.id === catKey &&
+                      draggedSidebarItem?.id !== catKey;
 
                     return (
                       <div key={cat.slug} className="space-y-0.5">
-                        <div className="flex items-center group">
+                        <div
+                          draggable={isVisualEditMode}
+                          onDragStart={(e) => handleRootDragStart(catKey, e)}
+                          onDragOver={(e) => handleRootDragOver(catKey, e)}
+                          onDragLeave={() => {
+                            if (dragOverSidebarItem?.id === catKey) {
+                              setDragOverSidebarItem(null);
+                            }
+                          }}
+                          onDrop={(e) => handleRootDrop(catKey, e)}
+                          onDragEnd={handleSidebarDragEnd}
+                          title={isVisualEditMode ? "Mantén pulsado y arrastra para reordenar esta categoría" : undefined}
+                          className={`flex items-center group rounded-md transition-all ${
+                            isDraggingRoot ? "opacity-40 border border-dashed border-primary/60 bg-primary/5" : ""
+                          } ${
+                            isDragOverRoot && dragOverSidebarItem?.position === "before"
+                              ? "border-t-2 border-t-primary bg-primary/10"
+                              : isDragOverRoot && dragOverSidebarItem?.position === "after"
+                              ? "border-b-2 border-b-primary bg-primary/10"
+                              : ""
+                          }`}
+                        >
                           <Link
                             to={`/categoria/${cat.slug}`}
-                            onClick={() => setMobileMenuOpen(false)}
+                            draggable={false}
+                            onClick={(e) => {
+                              if (isSidebarDraggingRef.current) {
+                                e.preventDefault();
+                                return;
+                              }
+                              setMobileMenuOpen(false);
+                            }}
                             className={`flex-1 flex items-center justify-between px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
                               isParentActive 
                                 ? "bg-primary/10 text-primary border border-primary/20" 
                                 : hasActiveChild
                                 ? "text-foreground font-medium bg-secondary/30"
                                 : "text-muted-foreground hover:text-foreground hover:bg-secondary/40"
-                            } ${isVisualEditMode ? "hover:ring-1 hover:ring-primary/60 cursor-pointer" : ""}`}
+                            } ${isVisualEditMode ? "hover:ring-1 hover:ring-primary/60 cursor-grab active:cursor-grabbing" : ""}`}
                           >
-                            <span className="flex items-center gap-3 truncate">
+                            <span className="flex items-center gap-2.5 truncate">
+                              {isVisualEditMode && (
+                                <GripVertical className="h-3.5 w-3.5 text-muted-foreground/50 group-hover:text-primary shrink-0 -ml-1 transition-colors" />
+                              )}
                               <Icon className="h-4 w-4 shrink-0" style={{ color: cat.color }} />
                               <span className="truncate">{cat.name}</span>
                             </span>
@@ -701,39 +916,89 @@ export function Layout({ children }: LayoutProps) {
                           <div className="relative ml-4 pl-3.5 border-l border-border/40 space-y-0.5 py-0.5">
                             {subcats.map((subcat) => {
                               const SubIcon = subcat.icon;
+                              const subKey = subcat.id || subcat.slug;
                               const isSubActive = location.pathname === `/categoria/${subcat.slug}`;
+                              const isDraggingSub =
+                                isVisualEditMode &&
+                                draggedSidebarItem?.type === "sub" &&
+                                draggedSidebarItem.id === subKey;
+                              const isDragOverSub =
+                                isVisualEditMode &&
+                                dragOverSidebarItem?.type === "sub" &&
+                                dragOverSidebarItem.id === subKey &&
+                                draggedSidebarItem?.id !== subKey;
+
                               return (
-                                <Link
+                                <div
                                   key={subcat.slug}
-                                  to={`/categoria/${subcat.slug}`}
-                                  onClick={() => setMobileMenuOpen(false)}
-                                  className={`flex items-center justify-between px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
-                                    isSubActive
-                                      ? "bg-primary/10 text-primary border border-primary/20 font-semibold"
-                                      : "text-muted-foreground hover:text-foreground hover:bg-secondary/35"
-                                  } ${isVisualEditMode ? "hover:ring-1 hover:ring-primary/60 cursor-pointer" : ""}`}
+                                  draggable={isVisualEditMode}
+                                  onDragStart={(e) => handleSubDragStart(subKey, catKey, e)}
+                                  onDragOver={(e) => handleSubDragOver(subKey, catKey, e)}
+                                  onDragLeave={() => {
+                                    if (dragOverSidebarItem?.id === subKey) {
+                                      setDragOverSidebarItem(null);
+                                    }
+                                  }}
+                                  onDrop={(e) => handleSubDrop(subKey, cat, e)}
+                                  onDragEnd={handleSidebarDragEnd}
+                                  title={
+                                    isVisualEditMode
+                                      ? `Mantén pulsado y arrastra para reordenar dentro de ${cat.name}`
+                                      : undefined
+                                  }
+                                  className={`rounded-md transition-all ${
+                                    isDraggingSub
+                                      ? "opacity-40 border border-dashed border-primary/60 bg-primary/5"
+                                      : ""
+                                  } ${
+                                    isDragOverSub && dragOverSidebarItem?.position === "before"
+                                      ? "border-t-2 border-t-primary bg-primary/10"
+                                      : isDragOverSub && dragOverSidebarItem?.position === "after"
+                                      ? "border-b-2 border-b-primary bg-primary/10"
+                                      : ""
+                                  }`}
                                 >
-                                  <span className="flex items-center gap-2.5 truncate">
-                                    <SubIcon
-                                      className="h-3.5 w-3.5 shrink-0"
-                                      style={{ color: subcat.color || cat.color }}
-                                    />
-                                    <span className="truncate">{subcat.name}</span>
-                                  </span>
-                                  {isVisualEditMode && (
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
+                                  <Link
+                                    to={`/categoria/${subcat.slug}`}
+                                    draggable={false}
+                                    onClick={(e) => {
+                                      if (isSidebarDraggingRef.current) {
                                         e.preventDefault();
-                                        e.stopPropagation();
-                                        setEditingCategory(subcat);
-                                      }}
-                                      className="text-[8.5px] text-primary/90 bg-primary/15 hover:bg-primary/25 px-1.5 py-0.5 rounded cursor-pointer"
-                                    >
-                                      Editar
-                                    </button>
-                                  )}
-                                </Link>
+                                        return;
+                                      }
+                                      setMobileMenuOpen(false);
+                                    }}
+                                    className={`flex items-center justify-between px-2.5 py-1 text-xs font-medium rounded-md transition-colors group ${
+                                      isSubActive
+                                        ? "bg-primary/10 text-primary border border-primary/20 font-semibold"
+                                        : "text-muted-foreground hover:text-foreground hover:bg-secondary/35"
+                                    } ${isVisualEditMode ? "hover:ring-1 hover:ring-primary/60 cursor-grab active:cursor-grabbing" : ""}`}
+                                  >
+                                    <span className="flex items-center gap-2 truncate">
+                                      {isVisualEditMode && (
+                                        <GripVertical className="h-3 w-3 text-muted-foreground/50 group-hover:text-primary shrink-0 -ml-1 transition-colors" />
+                                      )}
+                                      <SubIcon
+                                        className="h-3.5 w-3.5 shrink-0"
+                                        style={{ color: subcat.color || cat.color }}
+                                      />
+                                      <span className="truncate">{subcat.name}</span>
+                                    </span>
+                                    {isVisualEditMode && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          setEditingCategory(subcat);
+                                        }}
+                                        className="text-[8.5px] text-primary/90 bg-primary/15 hover:bg-primary/25 px-1.5 py-0.5 rounded cursor-pointer"
+                                      >
+                                        Editar
+                                      </button>
+                                    )}
+                                  </Link>
+                                </div>
                               );
                             })}
                           </div>

@@ -11,7 +11,8 @@ import {
 import { TarotLogo } from "./TarotLogo";
 import { useCategories, getGitHubAuthHeaders } from "../context/CategoryContext";
 import { useVisualEditor } from "../context/VisualEditorContext";
-import { AVAILABLE_ICONS, ICON_MAP } from "../utils/categoryHelper";
+import { useUIContent } from "../context/UIContentContext";
+import { AVAILABLE_ICONS, ICON_MAP, getAllArticleCategories, getCategoryForArticleInSection } from "../utils/categoryHelper";
 import { CategoryQuickEditModal } from "./webbuilder/CategoryQuickEditModal";
 import { syncFetch, getCachedArticles, setCachedArticles } from "../utils/syncArticles";
 import { PersonajesSilhouettesBanner } from "./PersonajesSilhouettesBanner";
@@ -19,11 +20,14 @@ import { LugaresSilhouettesBanner } from "./LugaresSilhouettesBanner";
 import { DragonesSilhouettesBanner } from "./DragonesSilhouettesBanner";
 import { PrimordialesSilhouettesBanner } from "./PrimordialesSilhouettesBanner";
 import { AscendidosSilhouettesBanner } from "./AscendidosSilhouettesBanner";
+import { AntiguosSilhouettesBanner } from "./AntiguosSilhouettesBanner";
+import { EditableBannerWrapper } from "./EditableBannerWrapper";
 
 export function CategoryView() {
   const { slug } = useParams<{ slug: string }>();
-  const { mergedCategories, addCategory } = useCategories();
+  const { mergedCategories, addCategory, assignArticlesToCategory } = useCategories();
   const { isVisualEditMode, showToast } = useVisualEditor();
+  const { getText } = useUIContent();
   const currentCategory = mergedCategories.find((c) => c.slug === slug);
 
   // Modal state for creating a new subcategory directly on this category page
@@ -32,11 +36,15 @@ export function CategoryView() {
   const [newSubDesc, setNewSubDesc] = useState("");
   const [newSubColor, setNewSubColor] = useState("#2dd4bf");
   const [newSubIcon, setNewSubIcon] = useState("Sparkles");
+  const [newSubArticleIds, setNewSubArticleIds] = useState<string[]>([]);
+  const [newSubArticleQuery, setNewSubArticleQuery] = useState("");
+  const [newSubOnlyParentArticles, setNewSubOnlyParentArticles] = useState(true);
   const [isCreatingSubcat, setIsCreatingSubcat] = useState(false);
   const [editingSubcategory, setEditingSubcategory] = useState<any | null>(null);
 
   // Modal state for assigning existing articles to this category in Visual Edit Mode
   const [isAssignArticlesOpen, setIsAssignArticlesOpen] = useState(false);
+  const [assignTargetOverride, setAssignTargetOverride] = useState<any | null>(null);
   const [assignSearchQuery, setAssignSearchQuery] = useState("");
   const [assignCategoryFilter, setAssignCategoryFilter] = useState<string>("all");
   const [assigningArticleId, setAssigningArticleId] = useState<string | null>(null);
@@ -47,7 +55,22 @@ export function CategoryView() {
   const isDragones = currentCategory?.slug === "dragones" || currentCategory?.slug === "dragon" || currentCategory?.name?.toLowerCase() === "dragones" || currentCategory?.name?.toLowerCase() === "dragón" || slug?.toLowerCase() === "dragones" || slug?.toLowerCase() === "dragon";
   const isPrimordiales = currentCategory?.slug === "primordiales" || currentCategory?.slug === "primordial" || currentCategory?.name?.toLowerCase() === "primordiales" || currentCategory?.name?.toLowerCase() === "primordial" || slug?.toLowerCase() === "primordiales" || slug?.toLowerCase() === "primordial";
   const isAscendidos = currentCategory?.slug === "ascendidos" || currentCategory?.slug === "ascendido" || currentCategory?.name?.toLowerCase() === "ascendidos" || currentCategory?.name?.toLowerCase() === "ascendido" || slug?.toLowerCase() === "ascendidos" || slug?.toLowerCase() === "ascendido";
-  const hasCustomBanner = isPersonajes || isLugares || isDragones || isPrimordiales || isAscendidos;
+  const isAntiguos = currentCategory?.slug === "antiguos" || currentCategory?.slug === "antiguo" || currentCategory?.slug === "los-antiguos" || currentCategory?.name?.toLowerCase() === "antiguos" || currentCategory?.name?.toLowerCase() === "antiguo" || currentCategory?.name?.toLowerCase() === "los antiguos" || slug?.toLowerCase() === "antiguos" || slug?.toLowerCase() === "antiguo" || slug?.toLowerCase() === "los-antiguos";
+  const bannerKey = isPersonajes
+    ? "personajes"
+    : isLugares
+      ? "lugares"
+      : isDragones
+        ? "dragones"
+        : isPrimordiales
+          ? "primordiales"
+          : isAscendidos
+            ? "ascendidos"
+            : isAntiguos
+              ? "antiguos"
+              : (currentCategory?.slug || slug || "categoria").toLowerCase().replace(/[^a-z0-9_-]/g, "_");
+  const hasSavedCustomBanner = Boolean(getText(`banner.image.${bannerKey}`, "").trim());
+  const hasCustomBanner = isPersonajes || isLugares || isDragones || isPrimordiales || isAscendidos || isAntiguos || hasSavedCustomBanner || isVisualEditMode;
 
   // Detección de Subcategorías directas (solo 1 nivel debajo de la categoría actual)
   const subcategories = useMemo(() => {
@@ -120,11 +143,13 @@ export function CategoryView() {
   const [filterQuery, setFilterQuery] = useState("");
   const [viewLayout, setViewLayout] = useState<"standard" | "sections">("standard");
 
-  // Subcategories UI states (Desplegado por defecto)
+  // Subcategories UI states (Desplegado por defecto, recordando preferencia en caché)
   const [isSubcatMinimized, setIsSubcatMinimized] = useState<boolean>(() => {
     try {
       const stored = localStorage.getItem(`tarot_subcat_min_v4_${slug}`);
       if (stored !== null) return stored === "true";
+      const globalPref = localStorage.getItem("tarot_subcat_min_v4_global");
+      if (globalPref !== null) return globalPref === "true";
       return false; // Desplegado por defecto
     } catch {
       return false;
@@ -137,7 +162,8 @@ export function CategoryView() {
       if (stored !== null) {
         setIsSubcatMinimized(stored === "true");
       } else {
-        setIsSubcatMinimized(false);
+        const globalPref = localStorage.getItem("tarot_subcat_min_v4_global");
+        setIsSubcatMinimized(globalPref !== null ? globalPref === "true" : false);
       }
     } catch {
       setIsSubcatMinimized(false);
@@ -150,6 +176,7 @@ export function CategoryView() {
       const next = !prev;
       try {
         localStorage.setItem(`tarot_subcat_min_v4_${slug}`, String(next));
+        localStorage.setItem("tarot_subcat_min_v4_global", String(next));
       } catch {}
       return next;
     });
@@ -163,7 +190,16 @@ export function CategoryView() {
     setNewSubDesc("");
     setNewSubColor(currentCategory?.color || "#2dd4bf");
     setNewSubIcon(currentCategory?.iconName || "Sparkles");
+    setNewSubArticleIds([]);
+    setNewSubArticleQuery("");
+    setNewSubOnlyParentArticles(true);
     setIsCreateSubcatOpen(true);
+  };
+
+  const toggleNewSubArticleId = (artId: string) => {
+    setNewSubArticleIds((prev) =>
+      prev.includes(artId) ? prev.filter((id) => id !== artId) : [...prev, artId]
+    );
   };
 
   const handleCreateSubcategory = async (e: React.FormEvent) => {
@@ -175,15 +211,32 @@ export function CategoryView() {
     }
     setIsCreatingSubcat(true);
     try {
-      await addCategory(
+      const created = await addCategory(
         newSubName.trim(),
         newSubDesc.trim() || `Subcategoría de ${currentCategory.name}`,
         newSubColor,
         newSubIcon,
         currentCategory.id,
-        currentCategory.slug
+        currentCategory.slug,
+        newSubArticleIds
       );
-      showToast(`Subcategoría "${newSubName.trim()}" creada dentro de ${currentCategory.name}.`, "success");
+      if (Array.isArray(created.updatedArticles) && created.updatedArticles.length > 0) {
+        const updatedMap = new Map(created.updatedArticles.map((a) => [a.id, a]));
+        const nextAll = allWikiArticles.map((a) => updatedMap.get(a.id) || a);
+        setCachedArticles(nextAll);
+        updateCategoryArticles(nextAll);
+      } else {
+        const fresh = getCachedArticles();
+        if (fresh.length > 0) updateCategoryArticles(fresh);
+      }
+      const assignedMsg =
+        newSubArticleIds.length > 0
+          ? ` con ${newSubArticleIds.length} ${newSubArticleIds.length === 1 ? "artículo asignado" : "artículos asignados"}`
+          : "";
+      showToast(
+        `Subcategoría "${newSubName.trim()}" guardada automáticamente${assignedMsg} dentro de ${currentCategory.name}.`,
+        "success"
+      );
       setIsCreateSubcatOpen(false);
       setIsSubcatMinimized(false);
       try {
@@ -384,19 +437,17 @@ export function CategoryView() {
   };
 
   const handleAssignArticleToCurrentCategory = async (article: WikiArticle) => {
-    const targetCat = activeSubcategoryObj || currentCategory;
+    const targetCat = assignTargetOverride || activeSubcategoryObj || currentCategory;
     if (!targetCat) return;
 
     const alreadyInTarget = doesArticleMatchCategory(article, targetCat.name, targetCat.slug);
     setAssigningArticleId(article.id);
 
     try {
-      const existingExtras = Array.isArray(article.extra_categories)
-        ? article.extra_categories.filter(Boolean)
-        : [];
+      const existingAll = getAllArticleCategories(article);
 
       let nextCategory = article.category || targetCat.name;
-      let nextExtras = [...existingExtras];
+      let nextExtras = [...existingAll];
 
       if (alreadyInTarget) {
         // Quitar de esta categoría si ya estaba asignado
@@ -409,22 +460,36 @@ export function CategoryView() {
           (article.category || "").toLowerCase().trim() === targetCat.name.toLowerCase().trim() ||
           (article.category || "").toLowerCase().trim() === targetCat.slug.toLowerCase().trim()
         ) {
-          const fallbackParent = ancestorCategories[ancestorCategories.length - 1]?.name || "Personajes";
+          const fallbackParent = ancestorCategories[ancestorCategories.length - 1]?.name || currentCategory?.name || "Personajes";
           nextCategory = nextExtras[0] || fallbackParent;
         }
+        if (nextExtras.length === 0) {
+          nextExtras = [nextCategory];
+        }
       } else {
-        // Autoasignar a la categoría actual preservando su categoría previa si era distinta
+        // Autoasignar a la categoría actual y a su categoría padre preservando todas sus categorías previas
+        const parentCatObj =
+          targetCat.parentId || targetCat.parentSlug
+            ? mergedCategories.find(
+                (c) =>
+                  c.id === targetCat.parentId ||
+                  c.slug === targetCat.parentSlug ||
+                  c.slug === targetCat.parentId ||
+                  c.id === targetCat.parentSlug
+              )
+            : null;
         if (
-          article.category &&
-          article.category.toLowerCase().trim() !== targetCat.name.toLowerCase().trim() &&
-          !nextExtras.some((ec) => ec.toLowerCase().trim() === article.category.toLowerCase().trim())
+          parentCatObj &&
+          !nextExtras.some((ec) => ec.toLowerCase().trim() === parentCatObj.name.toLowerCase().trim())
         ) {
-          nextExtras.push(article.category);
+          nextExtras.push(parentCatObj.name);
         }
         if (!nextExtras.some((ec) => ec.toLowerCase().trim() === targetCat.name.toLowerCase().trim())) {
           nextExtras.push(targetCat.name);
         }
-        nextCategory = targetCat.name;
+        if (!nextCategory) {
+          nextCategory = targetCat.name;
+        }
       }
 
       const updatedArticle: WikiArticle = {
@@ -440,20 +505,17 @@ export function CategoryView() {
       updateCategoryArticles(updatedAll);
       window.dispatchEvent(new CustomEvent("wiki-articles-updated"));
 
-      // Persistir en el servidor preservando siempre el contenido íntegro del artículo
-      await syncFetch(`/api/articles/${article.id}`, {
-        method: "PUT",
-        headers: getGitHubAuthHeaders(),
-        body: JSON.stringify({
-          ...updatedArticle,
-          _categoryAssignmentOnly: true
-        })
-      });
+      // Persistir atómicamente TANTO la subcategoría como sus artículos asignados en el servidor
+      await assignArticlesToCategory(
+        targetCat,
+        [article.id],
+        alreadyInTarget ? "remove" : "add"
+      );
 
       if (alreadyInTarget) {
         showToast(`Artículo "${article.title}" desvinculado de ${targetCat.name}.`, "info");
       } else {
-        showToast(`✨ "${article.title}" asignado a ${targetCat.name}.`, "success");
+        showToast(`✨ "${article.title}" guardado en ${targetCat.name}.`, "success");
       }
     } catch (err: any) {
       showToast("Error al asignar artículo: " + (err.message || err), "error");
@@ -587,7 +649,7 @@ export function CategoryView() {
 
       {/* Menú Popup Grande para Asignar Artículos a la Categoría Actual */}
       {isAssignArticlesOpen && currentCategory && (() => {
-        const targetCat = activeSubcategoryObj || currentCategory;
+        const targetCat = assignTargetOverride || activeSubcategoryObj || currentCategory;
         const TargetCatIcon = targetCat.icon || BookOpen;
         const q = assignSearchQuery.toLowerCase().trim();
 
@@ -691,7 +753,10 @@ export function CategoryView() {
           <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-background/85 backdrop-blur-md animate-in fade-in duration-150">
             <div
               className="fixed inset-0"
-              onClick={() => setIsAssignArticlesOpen(false)}
+              onClick={() => {
+                setIsAssignArticlesOpen(false);
+                setAssignTargetOverride(null);
+              }}
             />
             <div className="relative bg-card border border-border w-full max-w-4xl max-h-[85vh] rounded-2xl shadow-2xl overflow-hidden z-10 flex flex-col">
               {/* Header del Popup */}
@@ -717,7 +782,10 @@ export function CategoryView() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setIsAssignArticlesOpen(false)}
+                  onClick={() => {
+                    setIsAssignArticlesOpen(false);
+                    setAssignTargetOverride(null);
+                  }}
                   className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors cursor-pointer shrink-0"
                   title="Cerrar ventana"
                 >
@@ -852,7 +920,7 @@ export function CategoryView() {
                                 {art.title}
                               </h4>
                               <span className="text-[11px] text-muted-foreground truncate block">
-                                Categoría actual: <span className="text-foreground/85 font-medium">{art.category || "Sin categoría"}</span>
+                                Categorías: <span className="text-foreground/85 font-medium">{getAllArticleCategories(art).join(" • ") || "Sin categoría"}</span>
                               </span>
                             </div>
                           </div>
@@ -903,7 +971,10 @@ export function CategoryView() {
                 </span>
                 <button
                   type="button"
-                  onClick={() => setIsAssignArticlesOpen(false)}
+                  onClick={() => {
+                    setIsAssignArticlesOpen(false);
+                    setAssignTargetOverride(null);
+                  }}
                   className="px-4 py-1.5 text-xs font-bold bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors cursor-pointer"
                 >
                   Listo
@@ -914,163 +985,274 @@ export function CategoryView() {
         );
       })()}
 
-      {/* Modal para Crear Subcategoría directamente desde esta página */}
-      {isCreateSubcatOpen && currentCategory && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in duration-150">
-          <div
-            className="fixed inset-0"
-            onClick={() => setIsCreateSubcatOpen(false)}
-          />
-          <div className="relative bg-card border border-border w-full max-w-md rounded-2xl shadow-2xl overflow-hidden z-10">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-border bg-secondary/30">
-              <div className="flex items-center gap-2.5">
-                <div
-                  className="h-8 w-8 rounded-lg flex items-center justify-center border shadow-inner"
-                  style={{ backgroundColor: `${newSubColor}20`, borderColor: `${newSubColor}40` }}
+      {/* Modal para Crear Subcategoría directamente desde esta página (con selector de artículos integrado) */}
+      {isCreateSubcatOpen && currentCategory && (() => {
+        const subQ = newSubArticleQuery.toLowerCase().trim();
+        const candidateArticles = [...allWikiArticles]
+          .filter((a) => {
+            if (!a || !a.id) return false;
+            if (newSubOnlyParentArticles) {
+              const inParent =
+                doesArticleMatchCategory(a, currentCategory.name, currentCategory.slug) ||
+                descendantCategories.some((d) => doesArticleMatchCategory(a, d.name, d.slug));
+              if (!inParent && !newSubArticleIds.includes(a.id)) return false;
+            }
+            if (!subQ) return true;
+            return (
+              (a.title || "").toLowerCase().includes(subQ) ||
+              (a.category || "").toLowerCase().includes(subQ)
+            );
+          })
+          .sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in duration-150">
+            <div
+              className="fixed inset-0"
+              onClick={() => setIsCreateSubcatOpen(false)}
+            />
+            <div className="relative bg-card border border-border w-full max-w-2xl max-h-[90vh] rounded-2xl shadow-2xl overflow-hidden z-10 flex flex-col">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-border bg-secondary/30 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <div
+                    className="h-8 w-8 rounded-lg flex items-center justify-center border shadow-inner"
+                    style={{ backgroundColor: `${newSubColor}20`, borderColor: `${newSubColor}40` }}
+                  >
+                    <NewSubSelectedIcon className="h-4.5 w-4.5" style={{ color: newSubColor }} />
+                  </div>
+                  <div>
+                    <h3 className="font-heading font-bold text-sm text-foreground">
+                      Crear Subcategoría en {currentCategory.name}
+                    </h3>
+                    <p className="text-[11px] text-muted-foreground">
+                      Se guardará automáticamente junto con sus artículos asignados dentro de <span className="text-foreground font-semibold">{currentCategory.name}</span>
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsCreateSubcatOpen(false)}
+                  className="p-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
                 >
-                  <NewSubSelectedIcon className="h-4.5 w-4.5" style={{ color: newSubColor }} />
-                </div>
-                <div>
-                  <h3 className="font-heading font-bold text-sm text-foreground">
-                    Crear Subcategoría en {currentCategory.name}
-                  </h3>
-                  <p className="text-[11px] text-muted-foreground">
-                    Se asignará automáticamente dentro de <span className="text-foreground font-semibold">{currentCategory.name}</span>
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsCreateSubcatOpen(false)}
-                className="p-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleCreateSubcategory} className="p-5 space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-foreground mb-1.5">
-                  Nombre de la Subcategoría
-                </label>
-                <input
-                  type="text"
-                  value={newSubName}
-                  onChange={(e) => setNewSubName(e.target.value)}
-                  placeholder={`Ej: Nueva rama de ${currentCategory.name}...`}
-                  className="w-full text-xs p-2.5 rounded-lg bg-background border border-border focus:border-primary focus:outline-none text-foreground font-medium"
-                  autoFocus
-                  required
-                />
+                  <X className="h-4 w-4" />
+                </button>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-foreground mb-1.5">
-                  Descripción / Resumen
-                </label>
-                <textarea
-                  value={newSubDesc}
-                  onChange={(e) => setNewSubDesc(e.target.value)}
-                  placeholder="Breve explicación sobre qué artículos van en esta subcategoría..."
-                  rows={2}
-                  className="w-full text-xs p-2.5 rounded-lg bg-background border border-border focus:border-primary focus:outline-none text-foreground leading-relaxed resize-none"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-foreground mb-1.5 flex items-center gap-1.5">
-                    <Palette className="h-3.5 w-3.5 text-primary" />
-                    Color Distintivo
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="color"
-                      value={newSubColor}
-                      onChange={(e) => setNewSubColor(e.target.value)}
-                      className="h-8 w-12 rounded cursor-pointer border border-border bg-background p-0.5"
-                    />
+              <form onSubmit={handleCreateSubcategory} className="p-5 space-y-4 overflow-y-auto flex-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-foreground mb-1.5">
+                      Nombre de la Subcategoría
+                    </label>
                     <input
                       type="text"
-                      value={newSubColor}
-                      onChange={(e) => setNewSubColor(e.target.value)}
-                      className="w-full text-xs p-1.5 rounded-lg bg-background border border-border font-mono text-center"
+                      value={newSubName}
+                      onChange={(e) => setNewSubName(e.target.value)}
+                      placeholder={`Ej: Nueva rama de ${currentCategory.name}...`}
+                      className="w-full text-xs p-2.5 rounded-lg bg-background border border-border focus:border-primary focus:outline-none text-foreground font-medium"
+                      autoFocus
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-foreground mb-1.5">
+                      Descripción / Resumen
+                    </label>
+                    <input
+                      type="text"
+                      value={newSubDesc}
+                      onChange={(e) => setNewSubDesc(e.target.value)}
+                      placeholder="Breve explicación de la subcategoría..."
+                      className="w-full text-xs p-2.5 rounded-lg bg-background border border-border focus:border-primary focus:outline-none text-foreground"
                     />
                   </div>
                 </div>
 
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-foreground mb-1.5 flex items-center gap-1.5">
+                      <Palette className="h-3.5 w-3.5 text-primary" />
+                      Color Distintivo
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={newSubColor}
+                        onChange={(e) => setNewSubColor(e.target.value)}
+                        className="h-8 w-12 rounded cursor-pointer border border-border bg-background p-0.5"
+                      />
+                      <input
+                        type="text"
+                        value={newSubColor}
+                        onChange={(e) => setNewSubColor(e.target.value)}
+                        className="w-full text-xs p-1.5 rounded-lg bg-background border border-border font-mono text-center"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-foreground mb-1.5 flex items-center gap-1.5">
+                      <Sparkles className="h-3.5 w-3.5 text-primary" />
+                      Icono Visual
+                    </label>
+                    <select
+                      value={newSubIcon}
+                      onChange={(e) => setNewSubIcon(e.target.value)}
+                      className="w-full text-xs p-2 rounded-lg bg-background border border-border focus:border-primary focus:outline-none text-foreground cursor-pointer"
+                    >
+                      {AVAILABLE_ICONS.map((ic) => (
+                        <option key={ic.name} value={ic.name}>
+                          {ic.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
                 <div>
-                  <label className="block text-xs font-semibold text-foreground mb-1.5 flex items-center gap-1.5">
-                    <Sparkles className="h-3.5 w-3.5 text-primary" />
-                    Icono Visual
+                  <label className="block text-[11px] font-medium text-muted-foreground mb-1.5">
+                    Selección rápida de símbolo
                   </label>
-                  <select
-                    value={newSubIcon}
-                    onChange={(e) => setNewSubIcon(e.target.value)}
-                    className="w-full text-xs p-2 rounded-lg bg-background border border-border focus:border-primary focus:outline-none text-foreground cursor-pointer"
-                  >
-                    {AVAILABLE_ICONS.map((ic) => (
-                      <option key={ic.name} value={ic.name}>
-                        {ic.label}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="grid grid-cols-10 gap-1.5 max-h-[84px] overflow-y-auto p-2 rounded-xl bg-background/70 border border-border">
+                    {AVAILABLE_ICONS.map((ic) => {
+                      const IconComp = ic.icon;
+                      const isSelected = newSubIcon === ic.name;
+                      return (
+                        <button
+                          key={ic.name}
+                          type="button"
+                          onClick={() => setNewSubIcon(ic.name)}
+                          title={ic.label}
+                          className={`h-7 w-7 rounded-lg flex items-center justify-center border transition-all cursor-pointer ${
+                            isSelected
+                              ? "scale-105 shadow-xs"
+                              : "border-border/30 hover:border-primary/40 hover:bg-secondary/50 text-muted-foreground hover:text-foreground"
+                          }`}
+                          style={
+                            isSelected
+                              ? { borderColor: newSubColor, backgroundColor: `${newSubColor}22`, color: newSubColor }
+                              : undefined
+                          }
+                        >
+                          <IconComp className="h-3.5 w-3.5" />
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-[11px] font-medium text-muted-foreground mb-1.5">
-                  Selección rápida de símbolo
-                </label>
-                <div className="grid grid-cols-8 gap-1.5 max-h-[116px] overflow-y-auto p-2 rounded-xl bg-background/70 border border-border">
-                  {AVAILABLE_ICONS.map((ic) => {
-                    const IconComp = ic.icon;
-                    const isSelected = newSubIcon === ic.name;
-                    return (
+                {/* Selector integrado de artículos para asignar al crear la subcategoría */}
+                <div className="space-y-2 pt-2 border-t border-border/70">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                      <FolderPlus className="h-3.5 w-3.5 text-primary" />
+                      Asignar Artículos a esta Subcategoría ({newSubArticleIds.length} seleccionados)
+                    </label>
+                    <div className="flex items-center gap-1.5 text-[11px]">
                       <button
-                        key={ic.name}
                         type="button"
-                        onClick={() => setNewSubIcon(ic.name)}
-                        title={ic.label}
-                        className={`h-8 w-8 rounded-lg flex items-center justify-center border transition-all cursor-pointer ${
-                          isSelected
-                            ? "scale-105 shadow-xs"
-                            : "border-border/30 hover:border-primary/40 hover:bg-secondary/50 text-muted-foreground hover:text-foreground"
+                        onClick={() => setNewSubOnlyParentArticles(true)}
+                        className={`px-2 py-0.5 rounded-md border cursor-pointer transition-colors ${
+                          newSubOnlyParentArticles
+                            ? "bg-primary/20 text-primary border-primary/40 font-semibold"
+                            : "bg-background text-muted-foreground border-border/60 hover:text-foreground"
                         }`}
-                        style={
-                          isSelected
-                            ? { borderColor: newSubColor, backgroundColor: `${newSubColor}22`, color: newSubColor }
-                            : undefined
-                        }
                       >
-                        <IconComp className="h-4 w-4" />
+                        De {currentCategory.name}
                       </button>
-                    );
-                  })}
-                </div>
-              </div>
+                      <button
+                        type="button"
+                        onClick={() => setNewSubOnlyParentArticles(false)}
+                        className={`px-2 py-0.5 rounded-md border cursor-pointer transition-colors ${
+                          !newSubOnlyParentArticles
+                            ? "bg-primary/20 text-primary border-primary/40 font-semibold"
+                            : "bg-background text-muted-foreground border-border/60 hover:text-foreground"
+                        }`}
+                      >
+                        Todos ({allWikiArticles.length})
+                      </button>
+                    </div>
+                  </div>
 
-              <div className="pt-3 border-t border-border flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsCreateSubcatOpen(false)}
-                  className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground rounded-lg hover:bg-secondary/60 transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={isCreatingSubcat}
-                  className="px-4 py-1.5 text-xs font-bold bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-all flex items-center gap-1.5 shadow-sm disabled:opacity-50 cursor-pointer"
-                >
-                  <Check className="h-3.5 w-3.5" />
-                  {isCreatingSubcat ? "Creando..." : "Crear Subcategoría"}
-                </button>
-              </div>
-            </form>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                    <input
+                      type="text"
+                      value={newSubArticleQuery}
+                      onChange={(e) => setNewSubArticleQuery(e.target.value)}
+                      placeholder="Buscar artículos para asignar automáticamente..."
+                      className="w-full h-8 pl-8 pr-8 text-xs bg-background border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary"
+                    />
+                    {newSubArticleQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setNewSubArticleQuery("")}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-[175px] overflow-y-auto p-2 rounded-xl bg-background/60 border border-border">
+                    {candidateArticles.length > 0 ? (
+                      candidateArticles.map((art) => {
+                        const isSelected = newSubArticleIds.includes(art.id);
+                        return (
+                          <button
+                            key={art.id}
+                            type="button"
+                            onClick={() => toggleNewSubArticleId(art.id)}
+                            className={`text-left px-2.5 py-1.5 rounded-lg border text-xs flex items-center justify-between gap-2 transition-all cursor-pointer ${
+                              isSelected
+                                ? "bg-primary/15 border-primary/50 text-foreground font-semibold"
+                                : "bg-card/60 hover:bg-secondary/50 border-border/50 text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            <span className="truncate">{art.title}</span>
+                            {isSelected ? (
+                              <Check className="h-3.5 w-3.5 text-primary shrink-0" />
+                            ) : (
+                              <Plus className="h-3.5 w-3.5 opacity-50 shrink-0" />
+                            )}
+                          </button>
+                        );
+                      })
+                    ) : (
+                      <div className="col-span-2 text-center py-4 text-[11px] text-muted-foreground">
+                        No hay artículos que coincidan con la búsqueda.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-border flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsCreateSubcatOpen(false)}
+                    className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground rounded-lg hover:bg-secondary/60 transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isCreatingSubcat}
+                    className="px-4 py-1.5 text-xs font-bold bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-all flex items-center gap-1.5 shadow-sm disabled:opacity-50 cursor-pointer"
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                    {isCreatingSubcat
+                      ? "Guardando..."
+                      : newSubArticleIds.length > 0
+                        ? `Crear y Guardar (${newSubArticleIds.length} art.)`
+                        : "Crear Subcategoría"}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Top Bar: Breadcrumbs on Left, Search filter on Right */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1109,58 +1291,48 @@ export function CategoryView() {
         </div>
       </div>
 
-      {/* 1. Category Header Banner (Solo cuando hay silueta de categoría) */}
+      {/* 1. Category Header Banner (Siluetas por defecto o cualquier banner subido desde el PC en Modo Edición) */}
       {hasCustomBanner && (
         <div className="space-y-4 pb-4 border-b border-border/60">
-          {/* Silhouette decoration specifically for Personajes */}
-          {isPersonajes && (
-            <div className="relative w-full overflow-hidden rounded-2xl bg-gradient-to-b from-secondary/30 via-card/50 to-card border border-border/40 p-0 shadow-sm flex items-end justify-center">
+          <EditableBannerWrapper
+            bannerKey={bannerKey}
+            label={currentCategory?.name || slug || "Categoría"}
+            defaultFit="contain"
+            groundColor="#232e33"
+            className="w-full h-28 sm:h-36 md:h-44"
+          >
+            {isPersonajes ? (
               <PersonajesSilhouettesBanner
                 className="w-full h-28 sm:h-36 md:h-44"
                 color="#232e33"
               />
-            </div>
-          )}
-
-          {/* Silhouette decoration specifically for Lugares */}
-          {isLugares && (
-            <div className="relative w-full overflow-hidden rounded-2xl bg-gradient-to-b from-secondary/30 via-card/50 to-card border border-border/40 p-0 shadow-sm flex items-end justify-center">
+            ) : isLugares ? (
               <LugaresSilhouettesBanner
                 className="w-full h-28 sm:h-36 md:h-44"
                 color="#232e33"
               />
-            </div>
-          )}
-
-          {/* Silhouette decoration specifically for Dragones */}
-          {isDragones && (
-            <div className="relative w-full overflow-hidden rounded-2xl bg-gradient-to-b from-secondary/30 via-card/50 to-card border border-border/40 p-0 shadow-sm flex items-end justify-center">
+            ) : isDragones ? (
               <DragonesSilhouettesBanner
                 className="w-full h-28 sm:h-36 md:h-44"
                 color="#232e33"
               />
-            </div>
-          )}
-
-          {/* Silhouette decoration specifically for Primordiales */}
-          {isPrimordiales && (
-            <div className="relative w-full overflow-hidden rounded-2xl bg-gradient-to-b from-secondary/30 via-card/50 to-card border border-border/40 p-0 shadow-sm flex items-end justify-center">
+            ) : isPrimordiales ? (
               <PrimordialesSilhouettesBanner
                 className="w-full h-28 sm:h-36 md:h-44"
                 color="#232e33"
               />
-            </div>
-          )}
-
-          {/* Silhouette decoration specifically for Ascendidos */}
-          {isAscendidos && (
-            <div className="relative w-full overflow-hidden rounded-2xl bg-gradient-to-b from-secondary/30 via-card/50 to-card border border-border/40 p-0 shadow-sm flex items-end justify-center">
+            ) : isAscendidos ? (
               <AscendidosSilhouettesBanner
                 className="w-full h-28 sm:h-36 md:h-44"
                 color="#232e33"
               />
-            </div>
-          )}
+            ) : isAntiguos ? (
+              <AntiguosSilhouettesBanner
+                className="w-full h-28 sm:h-36 md:h-44"
+                color="#232e33"
+              />
+            ) : undefined}
+          </EditableBannerWrapper>
         </div>
       )}
 
@@ -1344,19 +1516,37 @@ export function CategoryView() {
                             <SubIcon className="h-4 w-4" style={{ color: subcat.color }} />
                           </div>
                           {isVisualEditMode && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setEditingSubcategory(subcat);
-                              }}
-                              className="text-[10px] font-semibold text-primary bg-primary/15 hover:bg-primary/25 px-2 py-0.5 rounded-full flex items-center gap-1 border border-primary/20 cursor-pointer"
-                              title={`Editar ${subcat.name}`}
-                            >
-                              <Edit3 className="h-2.5 w-2.5" />
-                              Editar
-                            </button>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setAssignTargetOverride(subcat);
+                                  setAssignSearchQuery("");
+                                  setAssignCategoryFilter("all");
+                                  setIsAssignArticlesOpen(true);
+                                }}
+                                className="text-[10px] font-semibold text-teal-400 bg-teal-500/15 hover:bg-teal-500/25 px-2 py-0.5 rounded-full flex items-center gap-1 border border-teal-500/30 cursor-pointer"
+                                title={`Asignar artículos a ${subcat.name}`}
+                              >
+                                <FolderPlus className="h-2.5 w-2.5" />
+                                Artículos
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setEditingSubcategory(subcat);
+                                }}
+                                className="text-[10px] font-semibold text-primary bg-primary/15 hover:bg-primary/25 px-2 py-0.5 rounded-full flex items-center gap-1 border border-primary/20 cursor-pointer"
+                                title={`Editar ${subcat.name}`}
+                              >
+                                <Edit3 className="h-2.5 w-2.5" />
+                                Editar
+                              </button>
+                            </div>
                           )}
                         </div>
 
@@ -1528,10 +1718,13 @@ export function CategoryView() {
           {/* Sección de artículos propios de la categoría principal (si los hay) */}
           {(() => {
             const rootOnlyArticles = sortedArticles.filter((a) => {
+              if (!currentCategory) return false;
+              const matchesSub = subcategories.some((s) => doesArticleMatchCategory(a, s.name, s.slug));
+              if (!matchesSub) return true;
               const artCat = (a.category || "").toLowerCase().trim();
               return (
-                artCat === currentCategory?.name.toLowerCase().trim() ||
-                artCat === currentCategory?.slug.toLowerCase().trim()
+                artCat === currentCategory.name.toLowerCase().trim() ||
+                artCat === currentCategory.slug.toLowerCase().trim()
               );
             });
             if (rootOnlyArticles.length === 0) return null;
@@ -1551,7 +1744,11 @@ export function CategoryView() {
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {rootOnlyArticles.map((article) => (
-                    <ArticleCard key={article.id} article={article} />
+                    <ArticleCard
+                      key={article.id}
+                      article={article}
+                      displayCategory={currentCategory?.name}
+                    />
                   ))}
                 </div>
               </div>
@@ -1609,7 +1806,11 @@ export function CategoryView() {
                 {subArticles.length > 0 ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {subArticles.map((article) => (
-                      <ArticleCard key={article.id} article={article} />
+                      <ArticleCard
+                        key={article.id}
+                        article={article}
+                        displayCategory={subcat.name}
+                      />
                     ))}
                   </div>
                 ) : (
@@ -1642,7 +1843,15 @@ export function CategoryView() {
           )}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {sortedArticles.map((article) => (
-              <ArticleCard key={article.id} article={article} />
+              <ArticleCard
+                key={article.id}
+                article={article}
+                displayCategory={getCategoryForArticleInSection(
+                  article,
+                  activeSubcategoryObj || currentCategory,
+                  mergedCategories
+                )}
+              />
             ))}
           </div>
         </div>

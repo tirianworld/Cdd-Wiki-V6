@@ -288,7 +288,7 @@
     "slug": "arena",
     "description": "Subcategoría de Lugares",
     "color": "#9b7d83",
-    "icon": "Sword",
+    "icon": "MapPin",
     "parentId": "cat-lugares",
     "parentSlug": "lugares",
     "id": "cat-1790880265420"

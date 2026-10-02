@@ -6,8 +6,10 @@ import {
   Compass, ChevronLeft, ChevronRight, Maximize2, Minimize2, 
   MapPin, Globe, Sparkles, Pause, Play, ZoomIn, ZoomOut, RotateCcw, X, 
   Upload, Image as ImageIcon, Link as LinkIcon, Settings, Check, RefreshCw,
-  Info, Sparkle, AlertCircle
+  Info, Sparkle, AlertCircle, Loader2
 } from "lucide-react";
+import { useVisualEditor } from "../context/VisualEditorContext";
+import { getGitHubAuthHeaders } from "../context/CategoryContext";
 
 // Import generated default map assets
 import kaliriaImg from "../assets/images/mapa_kaliria_1790076776369.jpg";
@@ -82,6 +84,10 @@ const LOCAL_STORAGE_KEY = "dragopedia_custom_banner_maps";
 const AUTOPLAY_INTERVAL = 8000; // 8 seconds per slide
 
 export function WorldMapsBanner() {
+  const { isVisualEditMode, showToast } = useVisualEditor();
+  const quickFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isQuickUploading, setIsQuickUploading] = useState(false);
+
   const [maps, setMaps] = useState<MapData[]>(() => {
     try {
       const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -269,13 +275,19 @@ export function WorldMapsBanner() {
       // 1. Primary dedicated sync to /api/banner-maps (writes local & pushes to GitHub)
       await fetch("/api/banner-maps", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...getGitHubAuthHeaders(),
+        },
         body: JSON.stringify({ maps: updatedMaps })
       });
       // 2. Also update site-ui-config for unified configuration
       await fetch("/api/site-ui-config", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...getGitHubAuthHeaders(),
+        },
         body: JSON.stringify({ banner_maps_custom: updatedMaps })
       });
     } catch (e) {
@@ -283,16 +295,121 @@ export function WorldMapsBanner() {
     }
   };
 
+  // Direct 1-click PC image upload for the currently displayed map in Edit Mode
+  const handleQuickMapFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !currentMap) return;
+
+    if (!file.type.startsWith("image/")) {
+      showToast("Selecciona un archivo de imagen válido desde tu PC (PNG, JPG, WEBP, etc.).", "warning");
+      return;
+    }
+
+    setIsQuickUploading(true);
+    showToast(`Subiendo y guardando nueva imagen para "${currentMap.name}"...`, "info", 2500);
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const dataUrl = reader.result as string;
+      try {
+        const res = await fetch("/api/upload-image", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...getGitHubAuthHeaders(),
+          },
+          body: JSON.stringify({
+            dataUrl,
+            name: `mapa_${currentMap.id}`,
+            subfolder: "banners",
+          }),
+        });
+
+        const data = await res.json();
+        const newImageUrl = data.success && data.url ? `${data.url}?t=${Date.now()}` : dataUrl;
+
+        const updatedMaps = maps.map((m, idx) =>
+          idx === currentIndex ? { ...m, image: newImageUrl, isCustom: true } : m
+        );
+        await handleSaveCustomMaps(updatedMaps);
+        showToast(`✨ Imagen del banner "${currentMap.name}" reemplazada y guardada permanentemente.`, "success", 4000);
+      } catch (err: any) {
+        showToast("Error al guardar la imagen del banner: " + (err?.message || err), "error");
+      } finally {
+        setIsQuickUploading(false);
+        if (quickFileInputRef.current) quickFileInputRef.current.value = "";
+      }
+    };
+
+    reader.onerror = () => {
+      setIsQuickUploading(false);
+      showToast("Error al leer el archivo de imagen.", "error");
+    };
+
+    reader.readAsDataURL(file);
+  };
+
   return (
     <section 
       id="world-maps-showcase"
-      className="group relative rounded-xl overflow-hidden border border-border bg-card transition-all select-none"
+      className={`group relative rounded-xl overflow-hidden border bg-card transition-all select-none ${
+        isVisualEditMode ? "border-primary/50 hover:border-primary" : "border-border"
+      }`}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       aria-label="Banner de Cartografía y Mapas del Mundo"
     >
+      {/* Hidden PC file input for quick replacement in Edit Mode */}
+      <input
+        ref={quickFileInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleQuickMapFileChange}
+        className="hidden"
+      />
+
+      {/* Edit Mode Floating Toolbar */}
+      {isVisualEditMode && (
+        <div className="absolute top-3 right-3 z-40 flex items-center gap-2 flex-wrap justify-end pointer-events-auto">
+          <button
+            type="button"
+            disabled={isQuickUploading}
+            onClick={(e) => {
+              e.stopPropagation();
+              quickFileInputRef.current?.click();
+            }}
+            className="px-3 py-1.5 rounded-xl bg-card/95 hover:bg-primary text-foreground hover:text-primary-foreground border border-primary/50 shadow-lg backdrop-blur-md text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-60"
+            title={`Reemplazar imagen de ${currentMap.name} desde tu PC`}
+          >
+            {isQuickUploading ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                <span>Guardando...</span>
+              </>
+            ) : (
+              <>
+                <Upload className="h-3.5 w-3.5 text-primary group-hover:text-current" />
+                <span>Reemplazar "{currentMap.name}" desde PC</span>
+              </>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsAssignModalOpen(true);
+            }}
+            className="px-3 py-1.5 rounded-xl bg-card/95 hover:bg-secondary text-foreground border border-border/80 shadow-lg backdrop-blur-md text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer"
+            title="Abrir gestor completo de imágenes y textos de los mapas del banner"
+          >
+            <Settings className="h-3.5 w-3.5 text-primary" />
+            <span className="hidden sm:inline">Gestionar Mapas</span>
+          </button>
+        </div>
+      )}
       {/* Main Map Viewer Stage (Full-bleed, clean & flat, NO aura or gradient glow) */}
-      <div className="relative w-full aspect-[16/9] sm:aspect-[21/9] md:aspect-[2.4/1] max-h-[460px] min-h-[300px] overflow-hidden bg-black flex items-center justify-center">
+      <div className="relative w-full aspect-[16/9] sm:aspect-[21/9] md:aspect-[2.4/1] max-h-[460px] min-h-[300px] overflow-hidden bg-transparent flex items-center justify-center">
         <AnimatePresence mode="wait">
           <motion.div
             key={currentMap.id}
@@ -562,11 +679,14 @@ function AssignMapImagesModal({ maps, onClose, onSave }: AssignMapImagesModalPro
       try {
         const res = await fetch("/api/upload-image", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...getGitHubAuthHeaders(),
+          },
           body: JSON.stringify({
             dataUrl,
             name: `mapa_${activeMap.id}`,
-            subfolder: "uploads"
+            subfolder: "banners"
           })
         });
 

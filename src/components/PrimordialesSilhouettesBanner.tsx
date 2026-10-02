@@ -10,6 +10,8 @@ import {
   CALDO_PRIMORDIAL_SOMBRA_FALLBACK_URL,
   CALDO_PRIMORDIAL_REFLEJO_SOLID_SRC,
   CALDO_PRIMORDIAL_REFLEJO_FALLBACK_URL,
+  CALDO_PRIMORDIAL_ELFO_SOLID_SRC,
+  CALDO_PRIMORDIAL_ELFO_FALLBACK_URL,
 } from "../assets/caldoPrimordialesSolidData";
 
 interface PrimordialesSilhouettesBannerProps {
@@ -102,6 +104,7 @@ export function PrimordialesSilhouettesBanner({
     naturaleza: CALDO_PRIMORDIAL_NATURALEZA_SOLID_SRC,
     sombra: CALDO_PRIMORDIAL_SOMBRA_SOLID_SRC,
     reflejo: CALDO_PRIMORDIAL_REFLEJO_SOLID_SRC,
+    elfo: CALDO_PRIMORDIAL_ELFO_SOLID_SRC,
   });
 
   const handleError = (id: string, fallback: string) => {
@@ -157,6 +160,7 @@ export function PrimordialesSilhouettesBanner({
                 <img
                   src={sources.reflejo || CALDO_PRIMORDIAL_REFLEJO_SOLID_SRC}
                   alt="Silueta del Reflejo del Hielo detrás a la derecha"
+                  referrerPolicy="no-referrer"
                   className="relative z-[5] w-auto h-[92%] max-h-26 sm:max-h-34 md:max-h-40 self-end object-contain object-bottom select-none pointer-events-none opacity-85 group-hover:opacity-100 transition-all duration-300 origin-bottom group-hover:scale-[1.02] block m-0 p-0"
                   style={{
                     objectPosition: "center bottom",
@@ -165,6 +169,47 @@ export function PrimordialesSilhouettesBanner({
                   }}
                   onError={() =>
                     handleError("reflejo", CALDO_PRIMORDIAL_REFLEJO_FALLBACK_URL)
+                  }
+                />
+              </div>
+            )}
+
+            {/* Silueta del Elfo Ancestral colocada DETRÁS a la DERECHA de la silueta verde (Naturaleza) */}
+            {p.id === "naturaleza" && (
+              <div
+                className="absolute bottom-0 -right-6 sm:-right-9 md:-right-12 lg:-right-14 z-[5] h-full flex items-end justify-center pointer-events-none transition-transform duration-300 origin-bottom group-hover:translate-x-1 p-0 m-0"
+                title="Monarca Elfo del Trono Arbóreo (Avatar de la Naturaleza)"
+              >
+                {/* Resplandor esmeralda etéreo del elfo */}
+                <div
+                  className="absolute -inset-3 sm:-inset-5 pointer-events-none rounded-full blur-xl opacity-60 group-hover:opacity-90 transition-opacity duration-300"
+                  style={{
+                    background:
+                      "radial-gradient(circle at 50% 60%, rgba(34, 197, 94, 0.25) 0%, rgba(74, 222, 128, 0.08) 50%, transparent 75%)",
+                  }}
+                />
+
+                {/* Reflejo de luz a nivel de suelo para el Elfo */}
+                <div
+                  className="absolute bottom-0 left-1/2 -translate-x-1/2 h-1 w-12 sm:w-16 rounded-full blur-sm opacity-60 pointer-events-none z-0"
+                  style={{
+                    backgroundColor: "#22c55e",
+                    boxShadow: "0 0 10px 2px #22c55e",
+                  }}
+                />
+
+                <img
+                  src={sources.elfo || CALDO_PRIMORDIAL_ELFO_SOLID_SRC}
+                  alt="Silueta del Elfo Ancestral detrás a la derecha del Primordial Verde"
+                  referrerPolicy="no-referrer"
+                  className="relative z-[5] w-auto h-[90%] max-h-26 sm:max-h-34 md:max-h-40 self-end object-contain object-bottom select-none pointer-events-none opacity-85 group-hover:opacity-100 transition-all duration-300 origin-bottom group-hover:scale-[1.02] block m-0 p-0"
+                  style={{
+                    objectPosition: "center bottom",
+                    filter:
+                      "drop-shadow(0 0 10px rgba(34, 197, 94, 0.55)) drop-shadow(0 0 20px rgba(74, 222, 128, 0.28)) drop-shadow(0 3px 6px rgba(0, 0, 0, 0.5))",
+                  }}
+                  onError={() =>
+                    handleError("elfo", CALDO_PRIMORDIAL_ELFO_FALLBACK_URL)
                   }
                 />
               </div>
