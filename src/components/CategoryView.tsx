@@ -1299,36 +1299,36 @@ export function CategoryView() {
             label={currentCategory?.name || slug || "Categoría"}
             defaultFit="contain"
             groundColor="#232e33"
-            className="w-full h-28 sm:h-36 md:h-44"
+            className="w-full h-36 sm:h-44 md:h-52 lg:h-60"
           >
             {isPersonajes ? (
               <PersonajesSilhouettesBanner
-                className="w-full h-28 sm:h-36 md:h-44"
+                className="w-full h-full"
                 color="#232e33"
               />
             ) : isLugares ? (
               <LugaresSilhouettesBanner
-                className="w-full h-28 sm:h-36 md:h-44"
+                className="w-full h-full"
                 color="#232e33"
               />
             ) : isDragones ? (
               <DragonesSilhouettesBanner
-                className="w-full h-28 sm:h-36 md:h-44"
+                className="w-full h-full"
                 color="#232e33"
               />
             ) : isPrimordiales ? (
               <PrimordialesSilhouettesBanner
-                className="w-full h-28 sm:h-36 md:h-44"
+                className="w-full h-full"
                 color="#232e33"
               />
             ) : isAscendidos ? (
               <AscendidosSilhouettesBanner
-                className="w-full h-28 sm:h-36 md:h-44"
+                className="w-full h-full"
                 color="#232e33"
               />
             ) : isAntiguos ? (
               <AntiguosSilhouettesBanner
-                className="w-full h-28 sm:h-36 md:h-44"
+                className="w-full h-full"
                 color="#232e33"
               />
             ) : undefined}

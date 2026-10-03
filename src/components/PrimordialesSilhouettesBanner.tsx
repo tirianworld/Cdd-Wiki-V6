@@ -120,7 +120,7 @@ export function PrimordialesSilhouettesBanner({
       <div className="absolute bottom-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-cyan-400/20 to-transparent blur-[1px] pointer-events-none z-20" />
 
       {/* Alineación centrada de los Primordiales al ras del suelo y sin márgenes laterales */}
-      <div className="relative z-10 flex items-end justify-center gap-4 sm:gap-10 md:gap-16 lg:gap-20 p-0 m-0 h-full w-full">
+      <div className="relative z-10 flex items-end justify-center gap-4 sm:gap-10 md:gap-16 lg:gap-20 p-0 m-0 h-full w-full pt-3 sm:pt-4">
         {PRIMORDIALS.map((p) => (
           <div
             key={p.id}
@@ -161,7 +161,7 @@ export function PrimordialesSilhouettesBanner({
                   src={sources.reflejo || CALDO_PRIMORDIAL_REFLEJO_SOLID_SRC}
                   alt="Silueta del Reflejo del Hielo detrás a la derecha"
                   referrerPolicy="no-referrer"
-                  className="relative z-[5] w-auto h-[92%] max-h-26 sm:max-h-34 md:max-h-40 self-end object-contain object-bottom select-none pointer-events-none opacity-85 group-hover:opacity-100 transition-all duration-300 origin-bottom group-hover:scale-[1.02] block m-0 p-0"
+                  className="relative z-[5] w-auto h-[90%] max-h-24 sm:max-h-32 md:max-h-36 self-end object-contain object-bottom select-none pointer-events-none opacity-85 group-hover:opacity-100 transition-all duration-300 origin-bottom group-hover:scale-[1.02] block m-0 p-0"
                   style={{
                     objectPosition: "center bottom",
                     filter:
@@ -202,7 +202,7 @@ export function PrimordialesSilhouettesBanner({
                   src={sources.elfo || CALDO_PRIMORDIAL_ELFO_SOLID_SRC}
                   alt="Silueta del Elfo Ancestral detrás a la derecha del Primordial Verde"
                   referrerPolicy="no-referrer"
-                  className="relative z-[5] w-auto h-[90%] max-h-26 sm:max-h-34 md:max-h-40 self-end object-contain object-bottom select-none pointer-events-none opacity-85 group-hover:opacity-100 transition-all duration-300 origin-bottom group-hover:scale-[1.02] block m-0 p-0"
+                  className="relative z-[5] w-auto h-[88%] max-h-24 sm:max-h-32 md:max-h-36 self-end object-contain object-bottom select-none pointer-events-none opacity-85 group-hover:opacity-100 transition-all duration-300 origin-bottom group-hover:scale-[1.02] block m-0 p-0"
                   style={{
                     objectPosition: "center bottom",
                     filter:
@@ -228,7 +228,7 @@ export function PrimordialesSilhouettesBanner({
             <img
               src={sources[p.id]}
               alt={`Silueta de ${p.name}`}
-              className="relative z-10 w-auto h-full max-h-28 sm:max-h-36 md:max-h-44 self-end object-contain object-bottom select-none pointer-events-none transition-transform duration-300 origin-bottom group-hover:scale-[1.03] block m-0 p-0"
+              className="relative z-10 w-auto h-full max-h-[86%] sm:max-h-[88%] self-end object-contain object-bottom select-none pointer-events-none transition-transform duration-300 origin-bottom group-hover:scale-[1.03] block m-0 p-0"
               style={{
                 objectPosition: "center bottom",
                 filter: p.auraGlow,

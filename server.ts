@@ -340,7 +340,17 @@ async function readFromGitHub<T>(repoPath: string, tokenOverride?: string): Prom
   return null;
 }
 
-async function readSiteUIConfig(): Promise<Record<string, any>> {
+let memorySiteUIConfig: Record<string, any> | null = null;
+let memorySiteUIConfigTime = 0;
+let lastGhSiteUIConfig: Record<string, any> = {};
+let lastGhSiteUIFetchTime = 0;
+
+async function readSiteUIConfig(forceFresh?: boolean): Promise<Record<string, any>> {
+  // 1. Fast in-memory cache if written recently and no force refresh requested
+  if (!forceFresh && memorySiteUIConfig && (Date.now() - memorySiteUIConfigTime < 20000)) {
+    return memorySiteUIConfig;
+  }
+
   let localData: Record<string, any> = {};
   try {
     if (fs.existsSync(LOCAL_SITE_UI_CONFIG_PATH)) {
@@ -364,17 +374,23 @@ async function readSiteUIConfig(): Promise<Record<string, any>> {
     // Non-critical Firestore read fallback
   }
 
-  let ghData: Record<string, any> = {};
-  try {
-    const activeToken = getEffectiveGitHubToken();
-    if (activeToken) {
-      const fetched = await readFromGitHub<Record<string, any>>(GITHUB_SITE_UI_CONFIG_PATH, activeToken);
-      if (fetched && typeof fetched === "object") {
-        ghData = fetched;
+  let ghData: Record<string, any> = lastGhSiteUIConfig;
+  // Only query GitHub if we don't have fresh cached GH data (limit to once every 60s) or localData is completely empty
+  const shouldFetchGh = forceFresh || Object.keys(localData).length === 0 || (Date.now() - lastGhSiteUIFetchTime > 60000);
+  if (shouldFetchGh) {
+    try {
+      const activeToken = getEffectiveGitHubToken();
+      if (activeToken) {
+        const fetched = await readFromGitHub<Record<string, any>>(GITHUB_SITE_UI_CONFIG_PATH, activeToken);
+        if (fetched && typeof fetched === "object") {
+          ghData = fetched;
+          lastGhSiteUIConfig = fetched;
+          lastGhSiteUIFetchTime = Date.now();
+        }
       }
+    } catch (err) {
+      console.error("[SiteUI] Error reading site ui config from GitHub:", err);
     }
-  } catch (err) {
-    console.error("[SiteUI] Error reading site ui config from GitHub:", err);
   }
 
   // Sort sources by _updated_at ascending so the newest state always wins on key conflicts
@@ -400,12 +416,16 @@ async function readSiteUIConfig(): Promise<Record<string, any>> {
     }
   } catch {}
 
+  memorySiteUIConfig = merged;
+  memorySiteUIConfigTime = Date.now();
   return merged;
 }
 
 async function writeSiteUIConfig(config: Record<string, any>, tokenOverride?: string): Promise<boolean> {
   try {
     const payload = { ...config, _updated_at: Date.now() };
+    memorySiteUIConfig = payload;
+    memorySiteUIConfigTime = Date.now();
     const jsonStr = JSON.stringify(payload, null, 2);
     try {
       const dir = path.dirname(LOCAL_SITE_UI_CONFIG_PATH);
@@ -414,6 +434,10 @@ async function writeSiteUIConfig(config: Record<string, any>, tokenOverride?: st
       const srcMirror = path.join(process.cwd(), "src", "data", "site_ui_config.json");
       if (fs.existsSync(path.dirname(srcMirror))) {
         fs.writeFileSync(srcMirror, jsonStr, "utf-8");
+      }
+      const distMirror = path.join(process.cwd(), "dist", "data", "site_ui_config.json");
+      if (fs.existsSync(path.dirname(distMirror))) {
+        fs.writeFileSync(distMirror, jsonStr, "utf-8");
       }
     } catch (e) {
       console.warn("[SiteUI] Could not write local file:", e);
@@ -5299,6 +5323,9 @@ app.delete("/api/filter-categories", async (req: Request, res: Response) => {
 // GET site UI customizable texts and menu configurations
 app.get("/api/site-ui-config", async (req: Request, res: Response) => {
   try {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
     const config = await readSiteUIConfig();
     res.json(config);
   } catch (err) {
@@ -5340,7 +5367,7 @@ const STATIC_BANNER_FILES: Record<string, string> = {
 
 app.post("/api/banner-image", async (req: Request, res: Response) => {
   try {
-    const { bannerKey, dataUrl, fit, transparent, showGround, tint } = req.body || {};
+    const { bannerKey, dataUrl, fit, transparent, showGround, tint, scale, offsetY } = req.body || {};
     if (!bannerKey || typeof bannerKey !== "string") {
       res.status(400).json({ error: "Se requiere bannerKey válido." });
       return;
@@ -5374,6 +5401,15 @@ app.post("/api/banner-image", async (req: Request, res: Response) => {
       const fileName = `banner_${cleanKey}_${uniqueSuffix}.${ext}`;
       const localFilePath = path.join(bannersDir, fileName);
       fs.writeFileSync(localFilePath, buffer);
+
+      // Mirror to dist/images/banners/ so deployed sites/workers immediately serve it
+      try {
+        const distBannersDir = path.join(process.cwd(), "dist", "images", "banners");
+        if (fs.existsSync(path.dirname(distBannersDir))) {
+          if (!fs.existsSync(distBannersDir)) fs.mkdirSync(distBannersDir, { recursive: true });
+          fs.writeFileSync(path.join(distBannersDir, fileName), buffer);
+        }
+      } catch {}
 
       // If the image is transparent (or transparent mode requested), apply stray pixel cleanup and Antiguos #232e33 figure color filter
       const shouldApplyTint = String(tint) !== "false";
@@ -5494,6 +5530,18 @@ app.post("/api/banner-image", async (req: Request, res: Response) => {
     if (typeof tint !== "undefined") {
       updatedConfig[`banner.tint.${cleanKey}`] = String(tint) === "true" ? "true" : "false";
     }
+    if (typeof scale !== "undefined") {
+      const numScale = parseInt(String(scale), 10);
+      if (!isNaN(numScale) && numScale >= 30 && numScale <= 300) {
+        updatedConfig[`banner.scale.${cleanKey}`] = String(numScale);
+      }
+    }
+    if (typeof offsetY !== "undefined") {
+      const numOffset = parseInt(String(offsetY), 10);
+      if (!isNaN(numOffset) && numOffset >= -100 && numOffset <= 100) {
+        updatedConfig[`banner.offsetY.${cleanKey}`] = String(numOffset);
+      }
+    }
 
     await writeSiteUIConfig(updatedConfig, activeToken);
 
@@ -5505,6 +5553,8 @@ app.post("/api/banner-image", async (req: Request, res: Response) => {
       transparent: updatedConfig[`banner.transparent.${cleanKey}`] || "false",
       showGround: updatedConfig[`banner.ground.${cleanKey}`] || "false",
       tint: updatedConfig[`banner.tint.${cleanKey}`] || "true",
+      scale: updatedConfig[`banner.scale.${cleanKey}`] || "100",
+      offsetY: updatedConfig[`banner.offsetY.${cleanKey}`] || "0",
       config: updatedConfig
     });
   } catch (err: any) {
@@ -5552,6 +5602,8 @@ app.post("/api/banner-image/reset", async (req: Request, res: Response) => {
     delete currentConfig[`banner.transparent.${cleanKey}`];
     delete currentConfig[`banner.ground.${cleanKey}`];
     delete currentConfig[`banner.tint.${cleanKey}`];
+    delete currentConfig[`banner.scale.${cleanKey}`];
+    delete currentConfig[`banner.offsetY.${cleanKey}`];
     await writeSiteUIConfig(currentConfig, activeToken);
 
     res.json({

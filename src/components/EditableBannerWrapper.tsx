@@ -1,7 +1,8 @@
 import React, { useRef, useState, useEffect } from "react";
 import { 
   Upload, RotateCcw, Maximize2, Minimize2, Loader2, Image as ImageIcon, 
-  Wand2, Check, X, Sliders, Eye, EyeOff, Palette, Sparkles, Scissors
+  Wand2, Check, X, Sliders, Eye, EyeOff, Palette, Sparkles, Scissors,
+  ZoomIn, ZoomOut, MoveVertical
 } from "lucide-react";
 import { useVisualEditor } from "../context/VisualEditorContext";
 import { useUIContent } from "../context/UIContentContext";
@@ -69,6 +70,31 @@ export function EditableBannerWrapper({
 
   const customImageUrl = getText(`banner.image.${cleanKey}`, "");
   const currentFit = (getText(`banner.fit.${cleanKey}`, defaultFit) as "contain" | "cover") || defaultFit;
+
+  // Escala manual del banner (zoom en %): 100 por defecto
+  const currentScaleStr = getText(`banner.scale.${cleanKey}`, "100");
+  const [manualScale, setManualScale] = useState<number>(parseInt(currentScaleStr, 10) || 100);
+  const [isScalePopoverOpen, setIsScalePopoverOpen] = useState(false);
+
+  // Desplazamiento vertical manual (Y en px): 0 por defecto
+  const currentOffsetYStr = getText(`banner.offsetY.${cleanKey}`, "0");
+  const [manualOffsetY, setManualOffsetY] = useState<number>(parseInt(currentOffsetYStr, 10) || 0);
+
+  // Lock to prevent server polls or context sync from resetting slider/scale while user is adjusting
+  const isInteractingWithScaleRef = useRef(false);
+  const scaleInteractionTimeoutRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (isInteractingWithScaleRef.current) return;
+    const s = parseInt(currentScaleStr, 10);
+    if (!isNaN(s) && s >= 30 && s <= 300) setManualScale(s);
+  }, [currentScaleStr]);
+
+  useEffect(() => {
+    if (isInteractingWithScaleRef.current) return;
+    const y = parseInt(currentOffsetYStr, 10);
+    if (!isNaN(y)) setManualOffsetY(y);
+  }, [currentOffsetYStr]);
   
   // Fondo transparente: activo por defecto para respetar transparencias
   const isTransparentBg = getText(`banner.transparent.${cleanKey}`, "true") === "true";
@@ -395,87 +421,189 @@ export function EditableBannerWrapper({
     }
   };
 
+  const scaleDebounceTimerRef = useRef<any>(null);
+
+  const persistBannerSettings = async (
+    overrides: {
+      scale?: number;
+      offsetY?: number;
+      fit?: "contain" | "cover";
+      transparent?: boolean;
+      tint?: boolean;
+      showGround?: boolean;
+      dataUrl?: string;
+    } = {},
+    toastMsg?: string
+  ) => {
+    const scaleToSave = overrides.scale !== undefined ? overrides.scale : manualScale;
+    const offsetYToSave = overrides.offsetY !== undefined ? overrides.offsetY : manualOffsetY;
+    const fitToSave = overrides.fit !== undefined ? overrides.fit : currentFit;
+    const transparentToSave = overrides.transparent !== undefined ? overrides.transparent : isTransparentBg;
+    const tintToSave = overrides.tint !== undefined ? overrides.tint : isAntiguosTintActive;
+    const groundToSave = overrides.showGround !== undefined ? overrides.showGround : showGround;
+
+    const entries: Record<string, string> = {
+      [`banner.scale.${cleanKey}`]: String(scaleToSave),
+      [`banner.offsetY.${cleanKey}`]: String(offsetYToSave),
+      [`banner.fit.${cleanKey}`]: String(fitToSave),
+      [`banner.transparent.${cleanKey}`]: String(transparentToSave),
+      [`banner.tint.${cleanKey}`]: String(tintToSave),
+      [`banner.ground.${cleanKey}`]: String(groundToSave),
+    };
+
+    // 1. Update React context & localStorage & server atomically
+    await setMultipleTexts(entries);
+
+    // 2. Broadcast via same-device BroadcastChannel for 0ms cross-tab sync
+    if (typeof BroadcastChannel !== "undefined") {
+      try {
+        const ch = new BroadcastChannel("dragopedia_ui_sync");
+        ch.postMessage({ type: "ui-update", texts: entries });
+        ch.close();
+      } catch {}
+    }
+
+    // 3. If a new image was uploaded from PC, save the binary file via /api/banner-image
+    if (overrides.dataUrl) {
+      try {
+        const res = await fetch("/api/banner-image", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...getGitHubAuthHeaders(),
+          },
+          body: JSON.stringify({
+            bannerKey: cleanKey,
+            dataUrl: overrides.dataUrl,
+            scale: String(scaleToSave),
+            offsetY: String(offsetYToSave),
+            fit: fitToSave,
+            transparent: String(transparentToSave),
+            tint: String(tintToSave),
+            showGround: String(groundToSave),
+          }),
+        });
+        const data = await res.json();
+        if (data && data.url) {
+          const savedUrl = `${data.url}?t=${Date.now()}`;
+          await setMultipleTexts({ [`banner.image.${cleanKey}`]: savedUrl });
+          if (onCustomImageChange) onCustomImageChange(savedUrl);
+        }
+      } catch (err) {
+        console.warn("[Banner] Error persisting image to server:", err);
+      }
+    }
+
+    window.dispatchEvent(
+      new CustomEvent("banner-image-updated", {
+        detail: {
+          bannerKey: cleanKey,
+          scale: scaleToSave,
+          offsetY: offsetYToSave,
+          fit: fitToSave,
+          transparent: transparentToSave,
+          tint: tintToSave,
+        },
+      })
+    );
+
+    if (toastMsg) {
+      showToast(toastMsg, "success", 2500);
+    }
+  };
+
+  const handleScaleChange = (newScale: number, commitImmediate = false) => {
+    const clamped = Math.max(30, Math.min(300, newScale));
+    setManualScale(clamped);
+    isInteractingWithScaleRef.current = true;
+
+    if (scaleInteractionTimeoutRef.current) {
+      clearTimeout(scaleInteractionTimeoutRef.current);
+    }
+    if (scaleDebounceTimerRef.current) {
+      clearTimeout(scaleDebounceTimerRef.current);
+    }
+
+    if (commitImmediate) {
+      persistBannerSettings({ scale: clamped }, `✨ Escalado guardado (${clamped}%) para todos los dispositivos`);
+      scaleInteractionTimeoutRef.current = setTimeout(() => {
+        isInteractingWithScaleRef.current = false;
+      }, 2000);
+    } else {
+      scaleDebounceTimerRef.current = setTimeout(() => {
+        persistBannerSettings({ scale: clamped });
+        scaleInteractionTimeoutRef.current = setTimeout(() => {
+          isInteractingWithScaleRef.current = false;
+        }, 2000);
+      }, 350);
+    }
+  };
+
+  const handleOffsetYChange = (newOffsetY: number, commitImmediate = false) => {
+    const clamped = Math.max(-60, Math.min(60, newOffsetY));
+    setManualOffsetY(clamped);
+    isInteractingWithScaleRef.current = true;
+
+    if (scaleInteractionTimeoutRef.current) {
+      clearTimeout(scaleInteractionTimeoutRef.current);
+    }
+    if (scaleDebounceTimerRef.current) {
+      clearTimeout(scaleDebounceTimerRef.current);
+    }
+
+    if (commitImmediate) {
+      persistBannerSettings({ offsetY: clamped }, `✨ Posición guardada (${clamped > 0 ? `+${clamped}` : clamped}px) para todos los dispositivos`);
+      scaleInteractionTimeoutRef.current = setTimeout(() => {
+        isInteractingWithScaleRef.current = false;
+      }, 2000);
+    } else {
+      scaleDebounceTimerRef.current = setTimeout(() => {
+        persistBannerSettings({ offsetY: clamped });
+        scaleInteractionTimeoutRef.current = setTimeout(() => {
+          isInteractingWithScaleRef.current = false;
+        }, 2000);
+      }, 350);
+    }
+  };
+
+  const handleQuickStepScale = (delta: number) => {
+    isInteractingWithScaleRef.current = true;
+    const next = Math.max(30, Math.min(300, manualScale + delta));
+    handleScaleChange(next, true);
+  };
+
   const handleToggleFit = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     const nextFit: "contain" | "cover" = currentFit === "contain" ? "cover" : "contain";
-    try {
-      await setMultipleTexts({ [`banner.fit.${cleanKey}`]: nextFit });
-      await fetch("/api/banner-image", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...getGitHubAuthHeaders(),
-        },
-        body: JSON.stringify({
-          bannerKey: cleanKey,
-          fit: nextFit,
-        }),
-      });
-      showToast(
-        `Ajuste cambiado a: ${
-          nextFit === "contain"
-            ? "Proporcional sin deformar (Contener)"
-            : "Cubrir (Completo)"
-        }.`,
-        "info",
-        2000
-      );
-    } catch {}
+    await persistBannerSettings(
+      { fit: nextFit },
+      `✨ Ajuste cambiado a: ${nextFit === "contain" ? "Proporcional sin deformar" : "Cubrir completo"} (guardado para todos los dispositivos)`
+    );
   };
 
   const handleToggleTransparentBg = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     const nextVal = !isTransparentBg;
-    try {
-      await setMultipleTexts({ [`banner.transparent.${cleanKey}`]: nextVal ? "true" : "false" });
-      await fetch("/api/banner-image", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...getGitHubAuthHeaders(),
-        },
-        body: JSON.stringify({
-          bannerKey: cleanKey,
-          transparent: nextVal ? "true" : "false",
-        }),
-      });
-      showToast(
-        nextVal
-          ? "✨ Fondo transparente ACTIVADO (sin recuadro oscuro)."
-          : "Fondo con tarjeta activado.",
-        "success",
-        2500
-      );
-    } catch {}
+    await persistBannerSettings(
+      { transparent: nextVal },
+      nextVal
+        ? "✨ Fondo transparente activado para todos los dispositivos."
+        : "✨ Fondo con tarjeta activado para todos los dispositivos."
+    );
   };
 
   const handleToggleAntiguosTint = async (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     const nextVal = !isAntiguosTintActive;
-    try {
-      await setMultipleTexts({ [`banner.tint.${cleanKey}`]: nextVal ? "true" : "false" });
-      await fetch("/api/banner-image", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...getGitHubAuthHeaders(),
-        },
-        body: JSON.stringify({
-          bannerKey: cleanKey,
-          tint: nextVal ? "true" : "false",
-        }),
-      });
-      showToast(
-        nextVal
-          ? "✨ Filtro de color Antiguos (#232e33) ACTIVADO."
-          : "Filtro desactivado (mostrando colores originales de la imagen).",
-        "info",
-        3000
-      );
-    } catch {}
+    await persistBannerSettings(
+      { tint: nextVal },
+      nextVal
+        ? "✨ Filtro de color Antiguos (#232e33) activado para todos los dispositivos."
+        : "✨ Filtro desactivado (color original) para todos los dispositivos."
+    );
   };
 
   const handleResetBanner = async (e: React.MouseEvent) => {
@@ -497,6 +625,19 @@ export function EditableBannerWrapper({
       await resetText(`banner.transparent.${cleanKey}`);
       await resetText(`banner.ground.${cleanKey}`);
       await resetText(`banner.tint.${cleanKey}`);
+      await resetText(`banner.scale.${cleanKey}`);
+      await resetText(`banner.offsetY.${cleanKey}`);
+      setManualScale(100);
+      setManualOffsetY(0);
+
+      // Broadcast reset to other tabs
+      if (typeof BroadcastChannel !== "undefined") {
+        try {
+          const ch = new BroadcastChannel("dragopedia_ui_sync");
+          ch.postMessage({ type: "ui-reset-banner", bannerKey: cleanKey });
+          ch.close();
+        } catch {}
+      }
 
       window.dispatchEvent(
         new CustomEvent("banner-image-updated", {
@@ -505,7 +646,7 @@ export function EditableBannerWrapper({
       );
       if (onCustomImageChange) onCustomImageChange(null);
 
-      showToast(`Banner de "${label || bannerKey}" restablecido al diseño original.`, "info", 3000);
+      showToast(`✨ Banner de "${label || bannerKey}" restablecido al diseño original para todos los dispositivos.`, "info", 3500);
     } catch (err: any) {
       showToast("Error al restablecer el banner.", "error");
     } finally {
@@ -757,7 +898,7 @@ export function EditableBannerWrapper({
         }}
         onDragLeave={() => setIsDragOver(false)}
         onDrop={handleDrop}
-        className={`relative group/banner w-full overflow-hidden transition-all flex items-end justify-center p-0 rounded-2xl bg-gradient-to-b from-secondary/25 via-card/40 to-card/60 border border-border/70 shadow-sm ${
+        className={`relative group/banner w-full transition-all flex flex-col justify-end p-0 rounded-2xl bg-gradient-to-b from-secondary/25 via-card/40 to-card/60 border border-border/70 shadow-sm ${className || "h-36 sm:h-44 md:h-52 lg:h-60"} ${
           isVisualEditMode
             ? isDragOver
               ? "ring-2 ring-primary border-primary bg-primary/10"
@@ -898,6 +1039,229 @@ export function EditableBannerWrapper({
               </button>
             )}
 
+            {/* 4d. Manual Scale & Zoom Control (Escalado a mano con botones rápidos y panel flotante) */}
+            <div className="relative">
+              <div className="flex items-center rounded-xl bg-card/95 border border-emerald-500/50 shadow-lg backdrop-blur-md overflow-hidden text-xs">
+                <button
+                  type="button"
+                  disabled={isUploading}
+                  title="Reducir escala (-5%)"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleQuickStepScale(-5);
+                  }}
+                  className="px-2 py-1.5 hover:bg-emerald-500/20 text-emerald-400 hover:text-emerald-300 transition-colors font-bold cursor-pointer disabled:opacity-50"
+                >
+                  -
+                </button>
+                <button
+                  type="button"
+                  disabled={isUploading}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setIsScalePopoverOpen(!isScalePopoverOpen);
+                  }}
+                  className={`px-2.5 py-1.5 hover:bg-emerald-500/10 text-foreground font-semibold flex items-center gap-1.5 transition-colors border-x border-emerald-500/30 cursor-pointer ${
+                    isScalePopoverOpen || manualScale !== 100 || manualOffsetY !== 0
+                      ? "bg-emerald-500/15 text-emerald-300"
+                      : ""
+                  }`}
+                  title="Cambiar el escalado y posición a mano del banner"
+                >
+                  <ZoomIn className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>{manualScale}%</span>
+                  {manualOffsetY !== 0 && (
+                    <span className="text-[10px] text-muted-foreground font-mono">
+                      {manualOffsetY > 0 ? `+${manualOffsetY}` : manualOffsetY}px
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  disabled={isUploading}
+                  title="Aumentar escala (+5%)"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handleQuickStepScale(5);
+                  }}
+                  className="px-2 py-1.5 hover:bg-emerald-500/20 text-emerald-400 hover:text-emerald-300 transition-colors font-bold cursor-pointer disabled:opacity-50"
+                >
+                  +
+                </button>
+              </div>
+
+              {/* Popover flotante para ajustar el escalado a mano (Sin recorte de overflow) */}
+              {isScalePopoverOpen && (
+                <>
+                  {/* Backdrop para cerrar al hacer clic fuera en pantallas pequeñas */}
+                  <div 
+                    className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs sm:hidden"
+                    onClick={() => {
+                      setIsScalePopoverOpen(false);
+                      isInteractingWithScaleRef.current = false;
+                    }}
+                  />
+
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="fixed inset-x-4 top-20 max-w-sm mx-auto sm:static sm:inset-auto sm:absolute sm:right-0 sm:top-full sm:mt-2 sm:w-80 p-4 rounded-2xl bg-[#0e1418]/98 border border-emerald-500/50 shadow-2xl backdrop-blur-2xl z-50 space-y-3.5 text-xs animate-in fade-in zoom-in-95 duration-150"
+                  >
+                    <div className="flex items-center justify-between font-bold text-foreground pb-2 border-b border-border/50">
+                      <span className="flex items-center gap-1.5 text-emerald-400 font-heading">
+                        <Sliders className="h-4 w-4" />
+                        Escalado a mano del Banner
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-emerald-400 font-bold bg-emerald-500/20 px-2 py-0.5 rounded-md border border-emerald-500/40 text-xs">
+                          {manualScale}%
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsScalePopoverOpen(false);
+                            isInteractingWithScaleRef.current = false;
+                          }}
+                          className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary cursor-pointer"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Slider de Escala */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                        <span>Tamaño de silueta / figuras</span>
+                        <span className="text-foreground font-semibold font-mono">{manualScale}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="30"
+                        max="250"
+                        step="1"
+                        value={manualScale}
+                        onMouseDown={() => { isInteractingWithScaleRef.current = true; }}
+                        onTouchStart={() => { isInteractingWithScaleRef.current = true; }}
+                        onChange={(e) => handleScaleChange(parseInt(e.target.value, 10))}
+                        onMouseUp={() => handleScaleChange(manualScale, true)}
+                        onTouchEnd={() => handleScaleChange(manualScale, true)}
+                        className="w-full accent-emerald-500 cursor-pointer h-2 bg-secondary/50 rounded-lg"
+                      />
+                      <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
+                        <span>30%</span>
+                        <span 
+                          className="cursor-pointer hover:text-emerald-400 underline underline-offset-2" 
+                          onClick={() => handleScaleChange(100, true)}
+                        >
+                          100% (Normal)
+                        </span>
+                        <span>250%</span>
+                      </div>
+                    </div>
+
+                    {/* Presets rápidos */}
+                    <div className="grid grid-cols-6 gap-1 pt-1">
+                      {[50, 75, 100, 125, 150, 200].map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => handleScaleChange(preset, true)}
+                          className={`py-1 rounded-lg text-[11px] font-mono font-medium transition-all cursor-pointer ${
+                            manualScale === preset
+                              ? "bg-emerald-500 text-black font-bold shadow-sm"
+                              : "bg-secondary/70 hover:bg-secondary text-foreground hover:text-emerald-300"
+                          }`}
+                        >
+                          {preset}%
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Slider de Desplazamiento Vertical (Y) */}
+                    <div className="space-y-1.5 pt-2 border-t border-border/50">
+                      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                        <span className="flex items-center gap-1">
+                          <MoveVertical className="h-3 w-3 text-emerald-400" />
+                          Posición Vertical (Suelo)
+                        </span>
+                        <span className="font-mono text-emerald-400 font-bold">{manualOffsetY > 0 ? `+${manualOffsetY}` : manualOffsetY} px</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="-50"
+                        max="50"
+                        step="1"
+                        value={manualOffsetY}
+                        onMouseDown={() => { isInteractingWithScaleRef.current = true; }}
+                        onTouchStart={() => { isInteractingWithScaleRef.current = true; }}
+                        onChange={(e) => handleOffsetYChange(parseInt(e.target.value, 10))}
+                        onMouseUp={() => handleOffsetYChange(manualOffsetY, true)}
+                        onTouchEnd={() => handleOffsetYChange(manualOffsetY, true)}
+                        className="w-full accent-emerald-500 cursor-pointer h-2 bg-secondary/50 rounded-lg"
+                      />
+                      <div className="flex justify-between text-[10px] text-muted-foreground font-mono">
+                        <span>Subir (-50px)</span>
+                        <span 
+                          className="cursor-pointer hover:text-emerald-400 underline underline-offset-2" 
+                          onClick={() => handleOffsetYChange(0, true)}
+                        >
+                          0 (Base)
+                        </span>
+                        <span>Bajar (+50px)</span>
+                      </div>
+                    </div>
+
+                    {/* Botón principal: Guardar para todos los dispositivos */}
+                    <div className="pt-2 border-t border-border/50 space-y-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          persistBannerSettings(
+                            { scale: manualScale, offsetY: manualOffsetY },
+                            "✨ Escalado guardado para todos los dispositivos con éxito."
+                          );
+                          setIsScalePopoverOpen(false);
+                          isInteractingWithScaleRef.current = false;
+                        }}
+                        className="w-full py-2 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition-all cursor-pointer"
+                      >
+                        <Check className="h-4 w-4" />
+                        <span>Guardar para todos los dispositivos</span>
+                      </button>
+
+                      <div className="flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleScaleChange(100, true);
+                            handleOffsetYChange(0, true);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-secondary/60 hover:bg-secondary text-muted-foreground hover:text-foreground text-[11px] flex items-center gap-1 cursor-pointer"
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                          Restablecer
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsScalePopoverOpen(false);
+                            isInteractingWithScaleRef.current = false;
+                          }}
+                          className="px-3 py-1 rounded-lg bg-secondary/80 hover:bg-secondary text-foreground text-[11px] cursor-pointer"
+                        >
+                          Cerrar
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
             {/* 5. Fit & Reset Buttons */}
             {hasCustomImage && (
               <>
@@ -923,7 +1287,7 @@ export function EditableBannerWrapper({
                   disabled={isUploading}
                   onClick={handleResetBanner}
                   className="px-2.5 py-1.5 rounded-xl bg-card/95 hover:bg-rose-500/20 text-rose-300 border border-rose-500/40 shadow-lg backdrop-blur-md text-xs font-medium flex items-center gap-1 transition-all cursor-pointer"
-                  title="Restablecer al banner original por defecto"
+                  title="Restablecer al banner original por defecto para todos los dispositivos"
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">Original</span>
@@ -933,54 +1297,81 @@ export function EditableBannerWrapper({
           </div>
         )}
 
-        {/* Content: Custom Uploaded Image OR Default Banner Children OR Empty Edit Slot */}
-        {hasCustomImage ? (
-          <div
-            className={`relative w-full overflow-hidden select-none flex items-end justify-center p-0 m-0 ${className}`}
-          >
-            {/* Suelo continuo alargado de extremo a extremo hasta los márgenes laterales sin deformar la imagen */}
+        {/* Content Container (Con bordes redondeados y recorte interior limpio) */}
+        <div className="relative w-full h-full overflow-hidden rounded-2xl flex items-end justify-center p-0 m-0">
+          {hasCustomImage ? (
             <div
-              className="absolute bottom-0 inset-x-0 w-full h-[5px] sm:h-[6px] md:h-[7.5px] pointer-events-none z-20"
-              style={{ backgroundColor: groundColor }}
-            />
-            <div className="absolute bottom-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-border/80 to-transparent pointer-events-none z-30" />
-
-            <div className="relative z-10 flex items-end justify-center w-full h-full p-0 m-0">
-              <img
-                src={customImageUrl}
-                alt={`Banner de ${label || bannerKey}`}
-                referrerPolicy="no-referrer"
-                className={
-                  currentFit === "cover"
-                    ? "w-full h-full object-cover object-bottom select-none pointer-events-none transition-transform duration-300 origin-bottom group-hover/banner:scale-[1.01] block m-0 p-0"
-                    : "w-full h-full max-h-44 self-end object-contain object-bottom select-none pointer-events-none transition-transform duration-300 origin-bottom group-hover/banner:scale-[1.01] block m-0 p-0"
-                }
-                style={{
-                  objectPosition: "center bottom",
-                  filter: isAntiguosTintActive ? `url(#${filterId})` : undefined,
-                }}
+              className="relative w-full h-full overflow-hidden select-none flex items-end justify-center p-0 m-0"
+            >
+              {/* Suelo continuo alargado de extremo a extremo hasta los márgenes laterales sin deformar la imagen */}
+              <div
+                className="absolute bottom-0 inset-x-0 w-full h-[5px] sm:h-[6px] md:h-[7.5px] pointer-events-none z-20"
+                style={{ backgroundColor: groundColor }}
               />
+              <div className="absolute bottom-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-border/80 to-transparent pointer-events-none z-30" />
+
+              <div 
+                className="relative z-10 flex items-end justify-center w-full h-full p-0 m-0 transition-transform duration-100 origin-bottom"
+                style={{
+                  transform: manualScale !== 100 || manualOffsetY !== 0 ? `scale(${manualScale / 100}) translateY(${manualOffsetY}px)` : undefined,
+                  transformOrigin: "center bottom",
+                }}
+              >
+                <img
+                  src={customImageUrl}
+                  alt={`Banner de ${label || bannerKey}`}
+                  referrerPolicy="no-referrer"
+                  className={
+                    currentFit === "cover"
+                      ? "w-full h-full object-cover object-bottom select-none pointer-events-none transition-transform duration-300 origin-bottom group-hover/banner:scale-[1.01] block m-0 p-0"
+                      : "max-h-[90%] sm:max-h-[92%] max-w-full w-auto h-auto self-end object-contain object-bottom select-none pointer-events-none transition-transform duration-300 origin-bottom group-hover/banner:scale-[1.01] block m-0 p-0"
+                  }
+                  style={{
+                    objectPosition: "center bottom",
+                    filter: isAntiguosTintActive ? `url(#${filterId})` : undefined,
+                  }}
+                />
+              </div>
             </div>
-          </div>
-        ) : children ? (
-          children
-        ) : (
-          /* Empty Banner Dropzone in Visual Edit Mode for categories without a default banner */
-          <div
-            onClick={() => fileInputRef.current?.click()}
-            className="w-full h-24 sm:h-28 flex flex-col items-center justify-center gap-1.5 text-center p-4 cursor-pointer hover:bg-primary/5 transition-colors border border-dashed border-primary/30 rounded-2xl"
-          >
-            <div className="h-8 w-8 rounded-xl bg-primary/15 border border-primary/30 flex items-center justify-center text-primary">
-              <ImageIcon className="h-4 w-4" />
+          ) : children ? (
+            <div
+              className="relative w-full h-full overflow-hidden select-none flex items-end justify-center p-0 m-0"
+            >
+              {/* Suelo continuo alargado de extremo a extremo hasta los márgenes laterales */}
+              <div
+                className="absolute bottom-0 inset-x-0 w-full h-[5px] sm:h-[6px] md:h-[7.5px] pointer-events-none z-20"
+                style={{ backgroundColor: groundColor }}
+              />
+              <div className="absolute bottom-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-border/80 to-transparent pointer-events-none z-30" />
+
+              <div
+                className="relative z-10 flex items-end justify-center w-full h-full p-0 m-0 transition-transform duration-100 origin-bottom"
+                style={{
+                  transform: manualScale !== 100 || manualOffsetY !== 0 ? `scale(${manualScale / 100}) translateY(${manualOffsetY}px)` : undefined,
+                  transformOrigin: "center bottom",
+                }}
+              >
+                {children}
+              </div>
             </div>
-            <span className="text-xs font-heading font-bold text-foreground">
-              Añadir banner con fondo transparente para {label || bannerKey}
-            </span>
-            <span className="text-[11px] text-muted-foreground">
-              Haz clic o arrastra un archivo PNG de tu PC (las siluetas tomarán el color de Antiguos #232e33)
-            </span>
-          </div>
-        )}
+          ) : (
+            /* Empty Banner Dropzone in Visual Edit Mode for categories without a default banner */
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full h-24 sm:h-28 flex flex-col items-center justify-center gap-1.5 text-center p-4 cursor-pointer hover:bg-primary/5 transition-colors border border-dashed border-primary/30 rounded-2xl"
+            >
+              <div className="h-8 w-8 rounded-xl bg-primary/15 border border-primary/30 flex items-center justify-center text-primary">
+                <ImageIcon className="h-4 w-4" />
+              </div>
+              <span className="text-xs font-heading font-bold text-foreground">
+                Añadir banner con fondo transparente para {label || bannerKey}
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                Haz clic o arrastra un archivo PNG de tu PC (las siluetas tomarán el color de Antiguos #232e33)
+              </span>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Background Remover Modal (Herramienta de Fondo Transparente) */}
